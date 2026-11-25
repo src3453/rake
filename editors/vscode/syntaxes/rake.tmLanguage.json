@@ -2,15 +2,24 @@
   "scopeName": "source.rake",
   "patterns": [
     {"include": "#comments"},
+    {"include": "#namespaces"},
     {"include": "#functions"},
     {"include": "#keywords"},
     {"include": "#types"},
     {"include": "#booleans"},
+    {"include": "#strings"},
     {"include": "#numbers"},
     {"include": "#operators"},
     {"include": "#punctuation"}
   ],
   "repository": {
+    "namespaces": {
+      "patterns": [
+        {"name": "keyword.control.namespace.rake", "match": "\\b(ns|use|as)\\b"},
+        {"name": "support.namespace.rake", "match": "\\bScratch\\b|(?<=Scratch\\.)[A-Z][A-Za-z0-9_]*"},
+        {"name": "entity.name.namespace.rake", "match": "(?<=\\bns\\s)[A-Za-z_][A-Za-z0-9_]*"}
+      ]
+    },
     "functions": {
       "patterns": [
         {"name": "entity.name.function.rake", "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"}
@@ -31,7 +40,7 @@
     },
     "types": {
       "patterns": [
-        {"name": "storage.type.rake", "match": "\\b(int|float|bool)\\b"}
+        {"name": "storage.type.rake", "match": "\\b(int|float|bool|text)\\b"}
       ]
     },
     "booleans": {
@@ -42,6 +51,11 @@
     "numbers": {
       "patterns": [
         {"name": "constant.numeric.rake", "match": "\\b[0-9]+(\\.[0-9]+)?\\b"}
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {"name": "string.quoted.double.rake", "match": "\"(?:\\\\.|[^\"\\\\])*\""}
       ]
     },
     "operators": {

@@ -1,12 +1,20 @@
 use rake::{
-    SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols, compile_source, source_tokens,
+    SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols, builtin_block_descriptions,
+    compile_source, source_tokens,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 
 const TOKEN_TYPES: &[&str] = &[
-    "variable", "type", "keyword", "number", "operator", "function",
+    "variable",
+    "type",
+    "keyword",
+    "number",
+    "operator",
+    "function",
+    "namespace",
+    "string",
 ];
 const TOKEN_MODIFIERS: &[&str] = &["declaration", "definition", "readonly", "modification"];
 
@@ -330,6 +338,405 @@ fn member_receiver_at(tokens: &[SourceToken], position: Position, prefix: &str) 
         .map(|token| token.text.clone())
 }
 
+fn qualified_receiver_at(
+    tokens: &[SourceToken],
+    position: Position,
+    prefix: &str,
+) -> Option<String> {
+    let prefix_start = Position {
+        line: position.line,
+        character: position
+            .character
+            .saturating_sub(prefix.encode_utf16().count() as u32),
+    };
+    let preceding: Vec<&SourceToken> = tokens
+        .iter()
+        .filter(|token| end_position(token) <= prefix_start)
+        .collect();
+    if preceding.last()?.text != "." {
+        return None;
+    }
+    let mut index = preceding.len() - 1;
+    let mut parts = Vec::new();
+    while index > 0 {
+        let identifier = preceding[index - 1];
+        if identifier.kind != SourceTokenKind::Identifier {
+            break;
+        }
+        parts.push(identifier.text.clone());
+        index -= 1;
+        if index > 0 && preceding[index - 1].text == "." {
+            index -= 1;
+        } else {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        parts.reverse();
+        Some(parts.join("."))
+    }
+}
+
+fn use_member_namespace_at(
+    tokens: &[SourceToken],
+    position: Position,
+    prefix: &str,
+) -> Option<String> {
+    let prefix_start = Position {
+        line: position.line,
+        character: position
+            .character
+            .saturating_sub(prefix.encode_utf16().count() as u32),
+    };
+    let preceding: Vec<&SourceToken> = tokens
+        .iter()
+        .filter(|token| end_position(token) <= prefix_start)
+        .collect();
+    let use_index = preceding.iter().rposition(|token| token.text == "use")?;
+    let open_index = preceding
+        .iter()
+        .enumerate()
+        .skip(use_index + 1)
+        .filter(|(_, token)| token.text == "{")
+        .map(|(index, _)| index)
+        .next_back()?;
+    if preceding.get(open_index.checked_sub(1)?)?.text != "." {
+        return None;
+    }
+    let identifier = preceding.get(open_index.checked_sub(2)?)?;
+    let token_index = tokens.iter().position(|token| {
+        token.line == identifier.line && token.start_character == identifier.start_character
+    })?;
+    let receiver = qualified_identifier_name(tokens, token_index)?;
+    source_namespace_alias(tokens, &receiver).or(Some(receiver))
+}
+
+fn namespace_at_index(tokens: &[SourceToken], end: usize) -> String {
+    let mut braces: Vec<Option<String>> = Vec::new();
+    let mut pending_namespace = None;
+    for index in 0..end.min(tokens.len()) {
+        match tokens[index].text.as_str() {
+            "ns" if tokens.get(index + 1).map(|token| token.kind)
+                == Some(SourceTokenKind::Identifier) =>
+            {
+                pending_namespace = Some(tokens[index + 1].text.clone());
+            }
+            "{" => braces.push(pending_namespace.take()),
+            "}" => {
+                braces.pop();
+            }
+            _ => {}
+        }
+    }
+    braces.into_iter().flatten().collect::<Vec<_>>().join(".")
+}
+
+fn namespace_at_position(tokens: &[SourceToken], position: Position) -> String {
+    let end = tokens
+        .iter()
+        .position(|token| source_position(token) >= position)
+        .unwrap_or(tokens.len());
+    namespace_at_index(tokens, end)
+}
+
+fn source_declares_namespace(tokens: &[SourceToken], path: &str) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        if token.text != "ns" {
+            return false;
+        }
+        let Some(name) = tokens.get(index + 1) else {
+            return false;
+        };
+        let parent = namespace_at_index(tokens, index);
+        if parent.is_empty() {
+            name.text == path
+        } else {
+            format!("{parent}.{}", name.text) == path
+        }
+    })
+}
+
+fn qualified_identifier_name(tokens: &[SourceToken], index: usize) -> Option<String> {
+    let token = tokens.get(index)?;
+    if token.kind != SourceTokenKind::Identifier {
+        return None;
+    }
+    let mut parts = vec![token.text.clone()];
+    let mut cursor = index;
+    while cursor >= 2
+        && tokens[cursor - 1].text == "."
+        && tokens[cursor - 2].kind == SourceTokenKind::Identifier
+    {
+        parts.push(tokens[cursor - 2].text.clone());
+        cursor -= 2;
+    }
+    parts.reverse();
+    Some(parts.join("."))
+}
+
+fn source_namespace_alias(tokens: &[SourceToken], name: &str) -> Option<String> {
+    for index in 0..tokens.len() {
+        if tokens[index].text != "use" {
+            continue;
+        }
+        let mut cursor = index + 1;
+        let mut path = Vec::new();
+        if tokens.get(cursor).map(|token| token.kind) != Some(SourceTokenKind::Identifier) {
+            continue;
+        }
+        path.push(tokens[cursor].text.clone());
+        cursor += 1;
+        while tokens.get(cursor).map(|token| token.text.as_str()) == Some(".")
+            && tokens.get(cursor + 1).map(|token| token.kind) == Some(SourceTokenKind::Identifier)
+        {
+            path.push(tokens[cursor + 1].text.clone());
+            cursor += 2;
+        }
+        if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as")
+            && tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some(name)
+        {
+            return Some(path.join("."));
+        }
+        if tokens.get(cursor).map(|token| token.text.as_str()) != Some("as")
+            && path.last().map(String::as_str) == Some(name)
+        {
+            return Some(path.join("."));
+        }
+    }
+    None
+}
+
+fn imported_builtin_members(tokens: &[SourceToken]) -> Vec<(String, String)> {
+    let descriptions = builtin_block_descriptions();
+    let mut imported = Vec::new();
+    for start in 0..tokens.len() {
+        if tokens[start].text != "use" {
+            continue;
+        }
+        let mut cursor = start + 1;
+        let Some(first) = tokens
+            .get(cursor)
+            .filter(|token| token.kind == SourceTokenKind::Identifier)
+        else {
+            continue;
+        };
+        let mut path = first.text.clone();
+        cursor += 1;
+        let mut members = Vec::new();
+        let mut grouped = false;
+        while tokens.get(cursor).map(|token| token.text.as_str()) == Some(".") {
+            if tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("{") {
+                cursor += 2;
+                grouped = true;
+                while let Some(member) = tokens.get(cursor) {
+                    if member.text == "}" {
+                        cursor += 1;
+                        break;
+                    }
+                    if member.kind == SourceTokenKind::Identifier {
+                        members.push(member.text.clone());
+                    }
+                    cursor += 1;
+                }
+                break;
+            }
+            let Some(segment) = tokens
+                .get(cursor + 1)
+                .filter(|token| token.kind == SourceTokenKind::Identifier)
+            else {
+                break;
+            };
+            path.push('.');
+            path.push_str(&segment.text);
+            cursor += 2;
+        }
+        let mut alias = None;
+        if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as") {
+            alias = tokens.get(cursor + 1).map(|token| token.text.clone());
+            cursor += 2;
+        }
+        if !grouped
+            && tokens.get(cursor).map(|token| token.text.as_str()) == Some(".")
+            && tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("{")
+        {
+            cursor += 2;
+            grouped = true;
+            while let Some(member) = tokens.get(cursor) {
+                if member.text == "}" {
+                    break;
+                }
+                if member.kind == SourceTokenKind::Identifier {
+                    members.push(member.text.clone());
+                }
+                cursor += 1;
+            }
+            if tokens.get(cursor).map(|token| token.text.as_str()) == Some("}") {
+                cursor += 1;
+            }
+        }
+        if grouped
+            && alias.is_none()
+            && tokens.get(cursor).map(|token| token.text.as_str()) == Some("as")
+        {
+            alias = tokens.get(cursor + 1).map(|token| token.text.clone());
+        }
+        if grouped {
+            for member in members {
+                let canonical = format!("{path}.{member}");
+                if descriptions.iter().any(|block| block.name == canonical) {
+                    let local = alias
+                        .as_ref()
+                        .map(|alias| format!("{alias}.{member}"))
+                        .unwrap_or(member);
+                    imported.push((local, canonical));
+                }
+            }
+        } else if let Some(alias) = alias {
+            if descriptions.iter().any(|block| block.name == path) {
+                imported.push((alias, path));
+            } else {
+                for block in descriptions
+                    .iter()
+                    .filter(|block| block.name.starts_with(&format!("{path}.")))
+                {
+                    imported.push((format!("{alias}.{}", block.member), block.name.to_string()));
+                }
+            }
+        } else {
+            if descriptions.iter().any(|block| block.name == path) {
+                imported.push((path.rsplit('.').next().unwrap_or(&path).to_string(), path));
+            } else {
+                for block in descriptions
+                    .iter()
+                    .filter(|block| block.name.starts_with(&format!("{path}.")))
+                {
+                    let member = block.member;
+                    let local = format!("{}.{member}", path.rsplit('.').next().unwrap_or(&path));
+                    imported.push((local, block.name.to_string()));
+                }
+            }
+        }
+    }
+    imported
+}
+
+fn source_imported_names(tokens: &[SourceToken]) -> Vec<(String, String)> {
+    let mut imported = Vec::new();
+    for start in 0..tokens.len() {
+        if tokens[start].text != "use" {
+            continue;
+        }
+        let mut cursor = start + 1;
+        let Some(first) = tokens
+            .get(cursor)
+            .filter(|token| token.kind == SourceTokenKind::Identifier)
+        else {
+            continue;
+        };
+        let mut path = first.text.clone();
+        cursor += 1;
+        let mut members = Vec::new();
+        let mut grouped = false;
+        while tokens.get(cursor).map(|token| token.text.as_str()) == Some(".") {
+            if tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("{") {
+                cursor += 2;
+                grouped = true;
+                while let Some(member) = tokens.get(cursor) {
+                    if member.text == "}" {
+                        cursor += 1;
+                        break;
+                    }
+                    if member.kind == SourceTokenKind::Identifier {
+                        members.push(member.text.clone());
+                    }
+                    cursor += 1;
+                }
+                break;
+            }
+            let Some(segment) = tokens
+                .get(cursor + 1)
+                .filter(|token| token.kind == SourceTokenKind::Identifier)
+            else {
+                break;
+            };
+            path.push('.');
+            path.push_str(&segment.text);
+            cursor += 2;
+        }
+        let mut alias = None;
+        if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as") {
+            alias = tokens.get(cursor + 1).map(|token| token.text.clone());
+            cursor += 2;
+        }
+        if !grouped
+            && tokens.get(cursor).map(|token| token.text.as_str()) == Some(".")
+            && tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("{")
+        {
+            cursor += 2;
+            grouped = true;
+            while let Some(member) = tokens.get(cursor) {
+                if member.text == "}" {
+                    cursor += 1;
+                    break;
+                }
+                if member.kind == SourceTokenKind::Identifier {
+                    members.push(member.text.clone());
+                }
+                cursor += 1;
+            }
+        }
+        if grouped
+            && alias.is_none()
+            && tokens.get(cursor).map(|token| token.text.as_str()) == Some("as")
+        {
+            alias = tokens.get(cursor + 1).map(|token| token.text.clone());
+        }
+        if grouped {
+            for member in members {
+                let local = alias
+                    .as_ref()
+                    .map(|alias| format!("{alias}.{member}"))
+                    .unwrap_or(member.clone());
+                imported.push((local, format!("{path}.{member}")));
+            }
+        } else if let Some(alias) = alias {
+            imported.push((alias, path));
+        }
+    }
+    imported
+}
+
+fn builtin_name_at(tokens: &[SourceToken], index: usize) -> Option<String> {
+    let descriptions = builtin_block_descriptions();
+    let name = qualified_identifier_name(tokens, index)?;
+    if descriptions.iter().any(|block| block.name == name) {
+        return Some(name);
+    }
+    if let Some((namespace, member)) = name.rsplit_once('.') {
+        if let Some(target) = source_namespace_alias(tokens, namespace) {
+            let canonical = format!("{target}.{member}");
+            if descriptions.iter().any(|block| block.name == canonical) {
+                return Some(canonical);
+            }
+        }
+    }
+    imported_builtin_members(tokens)
+        .into_iter()
+        .find_map(|(local, canonical)| (local == name).then_some(canonical))
+}
+
+fn imported_function_at(tokens: &[SourceToken], index: usize) -> Option<FunctionCompletion> {
+    let local_name = qualified_identifier_name(tokens, index)?;
+    let canonical = source_imported_names(tokens)
+        .into_iter()
+        .find_map(|(local, canonical)| (local == local_name).then_some(canonical))?;
+    function_completions(tokens)
+        .into_iter()
+        .find(|function| function.qualified_name == canonical)
+}
+
 fn instance_class_name(tokens: &[SourceToken], receiver: &str) -> Option<String> {
     for (index, token) in tokens.iter().enumerate() {
         if !matches!(token.text.as_str(), "var" | "const")
@@ -385,6 +792,7 @@ fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String
 #[derive(Clone, Debug)]
 struct FunctionCompletion {
     name: String,
+    qualified_name: String,
     parameters: Vec<(String, String)>,
     return_type: Option<String>,
 }
@@ -399,6 +807,12 @@ fn function_completions(tokens: &[SourceToken]) -> Vec<FunctionCompletion> {
             continue;
         }
         let name = tokens[index + 1].text.clone();
+        let namespace = namespace_at_index(tokens, index);
+        let qualified_name = if namespace.is_empty() {
+            name.clone()
+        } else {
+            format!("{namespace}.{name}")
+        };
         let mut cursor = index + 3;
         let mut parameters = Vec::new();
         let mut valid = true;
@@ -427,6 +841,7 @@ fn function_completions(tokens: &[SourceToken]) -> Vec<FunctionCompletion> {
                 };
             functions.push(FunctionCompletion {
                 name,
+                qualified_name,
                 parameters,
                 return_type,
             });
@@ -450,6 +865,43 @@ fn function_name_context(tokens: &[SourceToken], position: Position, prefix: &st
         .unwrap_or(false)
 }
 
+fn builtin_completion_item(
+    block: &rake::BuiltinBlockDescription,
+    label: &str,
+    insert_name: &str,
+) -> Value {
+    let parameters = block
+        .signature
+        .split_once('(')
+        .and_then(|(_, tail)| tail.strip_suffix(')'))
+        .unwrap_or("");
+    let arguments = parameters
+        .split(", ")
+        .enumerate()
+        .filter_map(|(index, parameter)| {
+            (!parameter.is_empty()).then(|| {
+                format!(
+                    "${{{}:{}}}",
+                    index + 1,
+                    parameter
+                        .split_once(':')
+                        .map(|(name, _)| name)
+                        .unwrap_or(parameter)
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    json!({
+        "label": label,
+        "kind": 3,
+        "detail": format!("Scratch.{}.{} — {}", block.category, block.signature, block.description),
+        "insertText": format!("{}({arguments})", insert_name),
+        "insertTextFormat": 2,
+        "sortText": format!("0-{label}")
+    })
+}
+
 fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let position = position_from_params(params).unwrap_or(Position {
         line: 0,
@@ -462,12 +914,102 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let type_context = is_type_context(&tokens, position, &prefix);
     let member_receiver = member_receiver_at(&tokens, position, &prefix);
 
+    if let Some(namespace) = use_member_namespace_at(&tokens, position, &prefix) {
+        return builtin_block_descriptions()
+            .into_iter()
+            .filter(|block| {
+                format!("Scratch.{}", block.category) == namespace
+                    && block.member.starts_with(&prefix)
+            })
+            .map(|block| builtin_completion_item(&block, block.member, block.member))
+            .collect();
+    }
+
+    if let Some(receiver) = qualified_receiver_at(&tokens, position, &prefix) {
+        let imported_namespace = source_namespace_alias(&tokens, &receiver);
+        let is_imported_namespace = imported_namespace.is_some();
+        let known_namespace = receiver == "Scratch"
+            || receiver.starts_with("Scratch.")
+            || source_declares_namespace(&tokens, &receiver)
+            || is_imported_namespace;
+        let namespace = imported_namespace.unwrap_or_else(|| receiver.clone());
+        let descriptions = builtin_block_descriptions();
+        if known_namespace && namespace == "Scratch" {
+            let mut categories = descriptions
+                .iter()
+                .map(|block| block.category)
+                .collect::<Vec<_>>();
+            categories.sort_unstable();
+            categories.dedup();
+            return categories
+                .into_iter()
+                .filter(|category| category.starts_with(&prefix))
+                .map(|category| {
+                    json!({
+                        "label": category,
+                        "kind": 9,
+                        "detail": "Scratch block category",
+                        "insertText": category,
+                        "sortText": format!("0-{category}")
+                    })
+                })
+                .collect();
+        }
+        if known_namespace && namespace.starts_with("Scratch.") {
+            if is_imported_namespace {
+                let imported = imported_builtin_members(&tokens);
+                let prefix_path = format!("{receiver}.");
+                let items = imported
+                    .iter()
+                    .filter_map(|(local, canonical)| {
+                        let member = local.strip_prefix(&prefix_path)?;
+                        let block = descriptions.iter().find(|block| block.name == canonical)?;
+                        (member.starts_with(&prefix))
+                            .then(|| builtin_completion_item(block, member, member))
+                    })
+                    .collect::<Vec<_>>();
+                return items;
+            }
+            return descriptions
+                .iter()
+                .filter(|block| {
+                    format!("Scratch.{}", block.category) == namespace
+                        && block.member.starts_with(&prefix)
+                })
+                .map(|block| builtin_completion_item(block, block.member, block.member))
+                .collect();
+        }
+        if known_namespace {
+            return function_completions(&tokens)
+            .into_iter()
+            .filter(|function| {
+                function.qualified_name.rsplit_once('.').map(|(parent, _)| parent) == Some(namespace.as_str())
+                    && function.name.starts_with(&prefix)
+            })
+            .map(|function| {
+                let signature = function.parameters.iter().map(|(name, ty)| format!("{name}: {ty}")).collect::<Vec<_>>().join(", ");
+                let return_type = function.return_type.map(|ty| format!(" -> {ty}")).unwrap_or_default();
+                let arguments = function.parameters.iter().enumerate().map(|(index, (name, _))| format!("${{{}:{name}}}", index + 1)).collect::<Vec<_>>().join(", ");
+                json!({
+                    "label": function.name,
+                    "kind": 3,
+                    "detail": format!("fn {}({signature}){return_type}", function.qualified_name),
+                    "insertText": format!("{}({arguments})", function.name),
+                    "insertTextFormat": 2,
+                    "sortText": format!("0-{}", function.name)
+                })
+            })
+            .collect();
+        }
+    }
+
     let mut items = Vec::new();
     let candidates: &[(&str, u32, &str)] = if type_context {
         &[
             ("int", 7, "Integer type"),
             ("float", 7, "Floating-point type"),
             ("bool", 7, "Boolean type"),
+            ("text", 7, "Text type"),
         ]
     } else if member_receiver.is_some() {
         &[]
@@ -480,6 +1022,9 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("else", 14, "Alternative branch"),
             ("while", 14, "Loop statement"),
             ("fn", 14, "Function declaration"),
+            ("ns", 14, "Namespace declaration"),
+            ("use", 14, "Import a namespace or declaration"),
+            ("Scratch", 9, "Scratch built-in namespaces"),
             ("return", 14, "Return a value from a function"),
             ("true", 14, "Boolean literal"),
             ("false", 14, "Boolean literal"),
@@ -494,6 +1039,20 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 "insertText": label,
                 "sortText": format!("0-{label}")
             }));
+        }
+    }
+
+    if !type_context {
+        for (local, canonical) in imported_builtin_members(&tokens) {
+            if local.contains('.') || !local.starts_with(&prefix) {
+                continue;
+            }
+            if let Some(block) = builtin_block_descriptions()
+                .iter()
+                .find(|block| block.name == canonical)
+            {
+                items.push(builtin_completion_item(block, &local, &local));
+            }
         }
     }
 
@@ -516,8 +1075,19 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
 
     if !type_context {
         let declaration_context = function_name_context(&tokens, position, &prefix);
+        let active_namespace = namespace_at_position(&tokens, position);
         for function in function_completions(&tokens) {
-            if !function.name.starts_with(&prefix) {
+            let visible_name = if function
+                .qualified_name
+                .rsplit_once('.')
+                .map(|(parent, _)| parent)
+                == Some(active_namespace.as_str())
+            {
+                function.name.clone()
+            } else {
+                function.qualified_name.clone()
+            };
+            if !visible_name.starts_with(&prefix) {
                 continue;
             }
             let signature = function
@@ -531,7 +1101,10 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 .as_ref()
                 .map(|ty| format!(" -> {ty}"))
                 .unwrap_or_default();
-            let detail = format!("fn {}({signature}){return_annotation}", function.name);
+            let detail = format!(
+                "fn {}({signature}){return_annotation}",
+                function.qualified_name
+            );
             let insert_text = if declaration_context {
                 function.name.clone()
             } else {
@@ -542,19 +1115,57 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                     .map(|(index, (name, _))| format!("${{{}:{name}}}", index + 1))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}({arguments})", function.name)
+                format!("{}({arguments})", visible_name)
             };
             let mut item = json!({
-                "label": function.name,
+                "label": visible_name,
                 "kind": 3,
                 "detail": detail,
                 "insertText": insert_text,
-                "sortText": format!("1-{}", function.name)
+                "sortText": format!("1-{}", visible_name)
             });
             if !declaration_context {
                 item["insertTextFormat"] = json!(2);
             }
             items.push(item);
+        }
+        let function_definitions = function_completions(&tokens);
+        for (local_name, qualified_name) in source_imported_names(&tokens) {
+            if local_name.contains('.') || !local_name.starts_with(&prefix) {
+                continue;
+            }
+            let Some(function) = function_definitions
+                .iter()
+                .find(|function| function.qualified_name == qualified_name)
+            else {
+                continue;
+            };
+            let signature = function
+                .parameters
+                .iter()
+                .map(|(name, ty)| format!("{name}: {ty}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let return_type = function
+                .return_type
+                .as_ref()
+                .map(|ty| format!(" -> {ty}"))
+                .unwrap_or_default();
+            let arguments = function
+                .parameters
+                .iter()
+                .enumerate()
+                .map(|(index, (name, _))| format!("${{{}:{name}}}", index + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            items.push(json!({
+                "label": local_name,
+                "kind": 3,
+                "detail": format!("fn {}({signature}){return_type}", function.qualified_name),
+                "insertText": format!("{}({arguments})", local_name),
+                "insertTextFormat": 2,
+                "sortText": format!("0-{local_name}")
+            }));
         }
     }
 
@@ -613,10 +1224,10 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
     let mut previous_line = 0;
     let mut previous_start = 0;
 
-    for token in tokens {
+    for (token_index, token) in tokens.iter().enumerate() {
         let token_type = match token.kind {
             SourceTokenKind::Identifier
-                if matches!(token.text.as_str(), "int" | "float" | "bool") =>
+                if matches!(token.text.as_str(), "int" | "float" | "bool" | "text") =>
             {
                 Some(types["type"])
             }
@@ -627,6 +1238,9 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                         | "const"
                         | "class"
                         | "fn"
+                        | "ns"
+                        | "use"
+                        | "as"
                         | "if"
                         | "else"
                         | "while"
@@ -636,6 +1250,21 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                 ) =>
             {
                 Some(types["keyword"])
+            }
+            SourceTokenKind::Identifier
+                if token.text == "Scratch"
+                    || (token_index > 0 && tokens[token_index - 1].text == "ns")
+                    || qualified_identifier_name(&tokens, token_index).is_some_and(|name| {
+                        name.starts_with("Scratch.") && name.matches('.').count() == 1
+                    }) =>
+            {
+                Some(types["namespace"])
+            }
+            SourceTokenKind::Identifier if builtin_name_at(&tokens, token_index).is_some() => {
+                Some(types["function"])
+            }
+            SourceTokenKind::Identifier if imported_function_at(&tokens, token_index).is_some() => {
+                Some(types["function"])
             }
             SourceTokenKind::Identifier
                 if occurrence_by_position
@@ -655,6 +1284,7 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             }
             SourceTokenKind::Identifier => Some(types["variable"]),
             SourceTokenKind::Number => Some(types["number"]),
+            SourceTokenKind::String => Some(types["string"]),
             SourceTokenKind::Symbol
                 if matches!(
                     token.text.as_str(),
@@ -763,11 +1393,63 @@ fn references_result(
 }
 
 fn hover_result(document: &Document, position: Position) -> Value {
+    let tokens = source_tokens(&document.text).unwrap_or_default();
+    if let Some((index, token)) = tokens.iter().enumerate().find(|(_, token)| {
+        token.line == position.line
+            && position.character >= token.start_character
+            && position.character <= token.start_character + token.length
+    }) {
+        if let Some(name) = builtin_name_at(&tokens, index) {
+            if let Some(block) = builtin_block_descriptions()
+                .into_iter()
+                .find(|block| block.name == name)
+            {
+                let signature = format!("Scratch.{}.{}", block.category, block.signature);
+                let detail = format!("```rake\n{signature}\n```\n\n{}", block.description);
+                return json!({
+                    "contents": {"kind": "markdown", "value": detail},
+                    "range": {
+                        "start": {"line": token.line, "character": token.start_character},
+                        "end": {"line": token.line, "character": token.start_character + token.length}
+                    }
+                });
+            }
+        }
+        if let Some(function) = imported_function_at(&tokens, index) {
+            let signature_arguments = function
+                .parameters
+                .iter()
+                .map(|(name, ty)| format!("{name}: {ty}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let return_type = function
+                .return_type
+                .as_ref()
+                .map(|ty| format!(" -> {ty}"))
+                .unwrap_or_default();
+            let signature = format!(
+                "fn {}({signature_arguments}){return_type}",
+                function.qualified_name
+            );
+            return json!({
+                "contents": {"kind": "markdown", "value": format!("```rake\n{signature}\n```\n\nImported function.")},
+                "range": {
+                    "start": {"line": token.line, "character": token.start_character},
+                    "end": {"line": token.line, "character": token.start_character + token.length}
+                }
+            });
+        }
+    }
     let occurrences = symbol_occurrences(document);
     let Some(occurrence) = occurrence_at(&occurrences, position) else {
         return Value::Null;
     };
-    let (signature, description) = if occurrence.class_symbol {
+    let (signature, description) = if occurrence.namespace_symbol {
+        (
+            format!("ns {}", occurrence.name),
+            "Namespace containing declarations.",
+        )
+    } else if occurrence.class_symbol {
         (format!("class {}", occurrence.name), "Class declaration.")
     } else if occurrence.function {
         (
@@ -813,7 +1495,7 @@ fn document_symbols(document: &Document) -> Value {
             json!({
                 "name": occurrence.name,
                 "detail": occurrence.ty,
-                "kind": if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter { 13 } else { 14 },
+                "kind": if occurrence.namespace_symbol { 3 } else if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter { 13 } else { 14 },
                 "range": range,
                 "selectionRange": range
             })
@@ -835,6 +1517,9 @@ fn valid_identifier(name: &str) -> bool {
                 | "const"
                 | "class"
                 | "fn"
+                | "ns"
+                | "use"
+                | "as"
                 | "if"
                 | "else"
                 | "while"
@@ -843,6 +1528,7 @@ fn valid_identifier(name: &str) -> bool {
                 | "int"
                 | "float"
                 | "bool"
+                | "text"
         )
 }
 

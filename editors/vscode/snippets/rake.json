@@ -28,6 +28,25 @@
     ],
     "description": "Declare a class with fields"
   },
+  "Namespace declaration": {
+    "prefix": "ns",
+    "body": [
+      "ns ${1:Graphics} {",
+      "    $0",
+      "}"
+    ],
+    "description": "Group declarations in an UpperCamelCase namespace"
+  },
+  "Import Scratch Motion blocks": {
+    "prefix": "usemotion",
+    "body": "use Scratch.Motion as motion",
+    "description": "Import the Scratch Motion block namespace with an alias"
+  },
+  "Import selected Scratch Motion blocks": {
+    "prefix": "usemoves",
+    "body": "use Scratch.Motion.{move, rotate, rotateCW, rotateCCW}",
+    "description": "Import selected Scratch Motion blocks"
+  },
   "Function call": {
     "prefix": "call",
     "body": "${1:functionName}(${2:argument})",

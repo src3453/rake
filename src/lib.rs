@@ -17,12 +17,14 @@ struct Token {
     text: String,
     line: usize,
     column: usize,
+    source_length: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TokenKind {
     Identifier,
     Number,
+    String,
     Symbol,
     Eof,
 }
@@ -31,6 +33,7 @@ enum TokenKind {
 pub enum SourceTokenKind {
     Identifier,
     Number,
+    String,
     Symbol,
 }
 
@@ -45,9 +48,11 @@ pub struct SourceToken {
 
 impl Token {
     fn new(kind: TokenKind, text: impl Into<String>, line: usize, column: usize) -> Self {
+        let text = text.into();
         Self {
             kind,
-            text: text.into(),
+            source_length: text.encode_utf16().count(),
+            text,
             line,
             column,
         }
@@ -132,6 +137,69 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             ));
             continue;
         }
+        if current == '"' {
+            let source_start = index;
+            index += 1;
+            column += 1;
+            let mut value = String::new();
+            let mut terminated = false;
+            while index < chars.len() {
+                match chars[index] {
+                    '"' => {
+                        index += 1;
+                        column += 1;
+                        terminated = true;
+                        break;
+                    }
+                    '\\' => {
+                        index += 1;
+                        column += 1;
+                        let Some(escaped) = chars.get(index).copied() else {
+                            break;
+                        };
+                        value.push(match escaped {
+                            'n' => '\n',
+                            'r' => '\r',
+                            't' => '\t',
+                            '"' => '"',
+                            '\\' => '\\',
+                            other => {
+                                return Err(diagnostic(
+                                    &Token::new(TokenKind::String, value, start_line, start_column),
+                                    format!("unsupported string escape \\{other}"),
+                                ));
+                            }
+                        });
+                        index += 1;
+                        column += 1;
+                    }
+                    '\n' => {
+                        return Err(diagnostic(
+                            &Token::new(TokenKind::String, value, start_line, start_column),
+                            "string literal cannot contain a newline",
+                        ));
+                    }
+                    character => {
+                        value.push(character);
+                        index += 1;
+                        column += 1;
+                    }
+                }
+            }
+            if !terminated {
+                return Err(diagnostic(
+                    &Token::new(TokenKind::String, value, start_line, start_column),
+                    "unterminated string literal",
+                ));
+            }
+            let mut token = Token::new(TokenKind::String, value, start_line, start_column);
+            token.source_length = chars[source_start..index]
+                .iter()
+                .map(|character| character.len_utf16())
+                .sum();
+            tokens.push(token);
+            continue;
+        }
         let pair = chars
             .get(index..index + 2)
             .map(|slice| slice.iter().collect::<String>());
@@ -177,6 +245,7 @@ pub fn source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
         let kind = match token.kind {
             TokenKind::Identifier => SourceTokenKind::Identifier,
             TokenKind::Number => SourceTokenKind::Number,
+            TokenKind::String => SourceTokenKind::String,
             TokenKind::Symbol => SourceTokenKind::Symbol,
             TokenKind::Eof => continue,
         };
@@ -192,7 +261,7 @@ pub fn source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
             text: token.text.clone(),
             line: (token.line - 1) as u32,
             start_character,
-            length: token.text.encode_utf16().count() as u32,
+            length: token.source_length as u32,
         });
     }
     Ok(result)
@@ -203,6 +272,8 @@ enum Type {
     Int,
     Float,
     Bool,
+    Text,
+    Any,
     Class(u32),
 }
 
@@ -212,10 +283,11 @@ impl Type {
             "int" => Ok(Self::Int),
             "float" => Ok(Self::Float),
             "bool" => Ok(Self::Bool),
+            "text" => Ok(Self::Text),
             _ => Err(diagnostic(
                 token,
                 format!(
-                    "unknown type {:?}; expected int, float, or bool",
+                    "unknown type {:?}; expected int, float, bool, or text",
                     token.text
                 ),
             )),
@@ -227,6 +299,8 @@ impl Type {
             Self::Int => "int",
             Self::Float => "float",
             Self::Bool => "bool",
+            Self::Text => "text",
+            Self::Any => "value",
             Self::Class(_) => "class instance",
         }
     }
@@ -298,6 +372,1047 @@ struct FunctionInfo {
     completed_symbol: Option<Symbol>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BuiltinInputKind {
+    Value,
+    Boolean,
+    Color,
+}
+
+#[derive(Clone, Debug)]
+struct BuiltinArgument {
+    name: &'static str,
+    input: &'static str,
+    kind: BuiltinInputKind,
+    menu: Option<BuiltinMenu>,
+}
+
+#[derive(Clone, Debug)]
+struct BuiltinMenu {
+    opcode: &'static str,
+    field: &'static str,
+    default: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct BuiltinBlock {
+    name: &'static str,
+    opcode: &'static str,
+    result: Option<Type>,
+    arguments: Vec<BuiltinArgument>,
+    fields: Vec<(&'static str, &'static str)>,
+    description: &'static str,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuiltinBlockDescription {
+    pub name: &'static str,
+    pub category: &'static str,
+    pub member: &'static str,
+    pub signature: String,
+    pub description: &'static str,
+}
+
+fn builtin_blocks() -> Vec<BuiltinBlock> {
+    use BuiltinInputKind::{Boolean, Value};
+    let arg = |name, input, kind| BuiltinArgument {
+        name,
+        input,
+        kind,
+        menu: None,
+    };
+    let menu_arg = |name, input, opcode, field, default| BuiltinArgument {
+        name,
+        input,
+        kind: Value,
+        menu: Some(BuiltinMenu {
+            opcode,
+            field,
+            default,
+        }),
+    };
+    let color_arg = |name, input| BuiltinArgument {
+        name,
+        input,
+        kind: BuiltinInputKind::Color,
+        menu: None,
+    };
+    let block = |name, opcode, result, arguments, fields, description| BuiltinBlock {
+        name,
+        opcode,
+        result,
+        arguments,
+        fields,
+        description,
+    };
+    vec![
+        block(
+            "Scratch.Motion.move",
+            "motion_movesteps",
+            None,
+            vec![arg("steps", "STEPS", Value)],
+            vec![],
+            "Move the sprite by a number of steps.",
+        ),
+        block(
+            "Scratch.Motion.rotate",
+            "motion_turnright",
+            None,
+            vec![arg("degrees", "DEGREES", Value)],
+            vec![],
+            "Alias for rotateCW; turn clockwise.",
+        ),
+        block(
+            "Scratch.Motion.rotateCW",
+            "motion_turnright",
+            None,
+            vec![arg("degrees", "DEGREES", Value)],
+            vec![],
+            "Turn the sprite clockwise.",
+        ),
+        block(
+            "Scratch.Motion.rotateCCW",
+            "motion_turnleft",
+            None,
+            vec![arg("degrees", "DEGREES", Value)],
+            vec![],
+            "Turn the sprite counterclockwise.",
+        ),
+        block(
+            "Scratch.Motion.changeXBy",
+            "motion_changexby",
+            None,
+            vec![arg("amount", "DX", Value)],
+            vec![],
+            "Change the sprite's x position.",
+        ),
+        block(
+            "Scratch.Motion.setX",
+            "motion_setx",
+            None,
+            vec![arg("x", "X", Value)],
+            vec![],
+            "Set the sprite's x position.",
+        ),
+        block(
+            "Scratch.Motion.changeYBy",
+            "motion_changeyby",
+            None,
+            vec![arg("amount", "DY", Value)],
+            vec![],
+            "Change the sprite's y position.",
+        ),
+        block(
+            "Scratch.Motion.setY",
+            "motion_sety",
+            None,
+            vec![arg("y", "Y", Value)],
+            vec![],
+            "Set the sprite's y position.",
+        ),
+        block(
+            "Scratch.Motion.goToXY",
+            "motion_gotoxy",
+            None,
+            vec![arg("x", "X", Value), arg("y", "Y", Value)],
+            vec![],
+            "Move the sprite to an x/y position.",
+        ),
+        block(
+            "Scratch.Motion.goTo",
+            "motion_goto",
+            None,
+            vec![menu_arg(
+                "target",
+                "TO",
+                "motion_goto_menu",
+                "TO",
+                "_random_",
+            )],
+            vec![],
+            "Move the sprite to a target or the mouse pointer.",
+        ),
+        block(
+            "Scratch.Motion.glideToXY",
+            "motion_glidesecstoxy",
+            None,
+            vec![
+                arg("seconds", "SECS", Value),
+                arg("x", "X", Value),
+                arg("y", "Y", Value),
+            ],
+            vec![],
+            "Glide the sprite to an x/y position.",
+        ),
+        block(
+            "Scratch.Motion.pointInDirection",
+            "motion_pointindirection",
+            None,
+            vec![arg("degrees", "DIRECTION", Value)],
+            vec![],
+            "Point the sprite in a direction.",
+        ),
+        block(
+            "Scratch.Motion.pointTowards",
+            "motion_pointtowards",
+            None,
+            vec![menu_arg(
+                "target",
+                "TOWARDS",
+                "motion_pointtowards_menu",
+                "TOWARDS",
+                "_mouse_",
+            )],
+            vec![],
+            "Point the sprite towards a target.",
+        ),
+        block(
+            "Scratch.Motion.xPosition",
+            "motion_xposition",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the sprite's x position.",
+        ),
+        block(
+            "Scratch.Motion.yPosition",
+            "motion_yposition",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the sprite's y position.",
+        ),
+        block(
+            "Scratch.Motion.direction",
+            "motion_direction",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the sprite's direction.",
+        ),
+        block(
+            "Scratch.Motion.ifOnEdgeBounce",
+            "motion_ifonedgebounce",
+            None,
+            vec![],
+            vec![],
+            "Bounce the sprite when it touches the edge.",
+        ),
+        block(
+            "Scratch.Motion.rotationStyleAllAround",
+            "motion_setrotationstyle",
+            None,
+            vec![],
+            vec![("ROTATION_STYLE", "all around")],
+            "Set the sprite to rotate freely.",
+        ),
+        block(
+            "Scratch.Motion.rotationStyleLeftRight",
+            "motion_setrotationstyle",
+            None,
+            vec![],
+            vec![("ROTATION_STYLE", "left-right")],
+            "Set the sprite to rotate left and right only.",
+        ),
+        block(
+            "Scratch.Motion.rotationStyleNone",
+            "motion_setrotationstyle",
+            None,
+            vec![],
+            vec![("ROTATION_STYLE", "don't rotate")],
+            "Keep the sprite upright.",
+        ),
+        block(
+            "Scratch.Looks.say",
+            "looks_say",
+            None,
+            vec![arg("message", "MESSAGE", Value)],
+            vec![],
+            "Show a speech bubble.",
+        ),
+        block(
+            "Scratch.Looks.sayForSeconds",
+            "looks_sayforsecs",
+            None,
+            vec![
+                arg("message", "MESSAGE", Value),
+                arg("seconds", "SECS", Value),
+            ],
+            vec![],
+            "Show a speech bubble for a number of seconds.",
+        ),
+        block(
+            "Scratch.Looks.think",
+            "looks_think",
+            None,
+            vec![arg("message", "MESSAGE", Value)],
+            vec![],
+            "Show a thought bubble.",
+        ),
+        block(
+            "Scratch.Looks.thinkForSeconds",
+            "looks_thinkforsecs",
+            None,
+            vec![
+                arg("message", "MESSAGE", Value),
+                arg("seconds", "SECS", Value),
+            ],
+            vec![],
+            "Show a thought bubble for a number of seconds.",
+        ),
+        block(
+            "Scratch.Looks.changeSizeBy",
+            "looks_changesizeby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![],
+            "Change the sprite's size.",
+        ),
+        block(
+            "Scratch.Looks.setSizeTo",
+            "looks_setsizeto",
+            None,
+            vec![arg("percent", "SIZE", Value)],
+            vec![],
+            "Set the sprite's size as a percentage.",
+        ),
+        block(
+            "Scratch.Looks.show",
+            "looks_show",
+            None,
+            vec![],
+            vec![],
+            "Show the sprite.",
+        ),
+        block(
+            "Scratch.Looks.hide",
+            "looks_hide",
+            None,
+            vec![],
+            vec![],
+            "Hide the sprite.",
+        ),
+        block(
+            "Scratch.Looks.size",
+            "looks_size",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the sprite's size.",
+        ),
+        block(
+            "Scratch.Looks.costumeNumber",
+            "looks_costumenumbername",
+            Some(Type::Float),
+            vec![],
+            vec![("NUMBER_NAME", "number")],
+            "Read the current costume number.",
+        ),
+        block(
+            "Scratch.Looks.nextCostume",
+            "looks_nextcostume",
+            None,
+            vec![],
+            vec![],
+            "Switch to the next costume.",
+        ),
+        block(
+            "Scratch.Looks.switchCostumeTo",
+            "looks_switchcostumeto",
+            None,
+            vec![menu_arg(
+                "costume",
+                "COSTUME",
+                "looks_costume",
+                "COSTUME",
+                "costume1",
+            )],
+            vec![],
+            "Switch to a costume by name.",
+        ),
+        block(
+            "Scratch.Looks.switchBackdropTo",
+            "looks_switchbackdropto",
+            None,
+            vec![menu_arg(
+                "backdrop",
+                "BACKDROP",
+                "looks_backdrops",
+                "BACKDROP",
+                "backdrop1",
+            )],
+            vec![],
+            "Switch to a backdrop by name.",
+        ),
+        block(
+            "Scratch.Looks.clearEffects",
+            "looks_cleargraphiceffects",
+            None,
+            vec![],
+            vec![],
+            "Clear all graphic effects.",
+        ),
+        block(
+            "Scratch.Looks.changeColorEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "COLOR")],
+            "Change the color effect.",
+        ),
+        block(
+            "Scratch.Looks.setColorEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "COLOR")],
+            "Set the color effect.",
+        ),
+        block(
+            "Scratch.Looks.changeFisheyeEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "FISHEYE")],
+            "Change the fisheye effect.",
+        ),
+        block(
+            "Scratch.Looks.setFisheyeEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "FISHEYE")],
+            "Set the fisheye effect.",
+        ),
+        block(
+            "Scratch.Looks.changeWhirlEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "WHIRL")],
+            "Change the whirl effect.",
+        ),
+        block(
+            "Scratch.Looks.setWhirlEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "WHIRL")],
+            "Set the whirl effect.",
+        ),
+        block(
+            "Scratch.Looks.changePixelateEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "PIXELATE")],
+            "Change the pixelate effect.",
+        ),
+        block(
+            "Scratch.Looks.setPixelateEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "PIXELATE")],
+            "Set the pixelate effect.",
+        ),
+        block(
+            "Scratch.Looks.changeMosaicEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "MOSAIC")],
+            "Change the mosaic effect.",
+        ),
+        block(
+            "Scratch.Looks.setMosaicEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "MOSAIC")],
+            "Set the mosaic effect.",
+        ),
+        block(
+            "Scratch.Looks.changeBrightnessEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "BRIGHTNESS")],
+            "Change the brightness effect.",
+        ),
+        block(
+            "Scratch.Looks.setBrightnessEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "BRIGHTNESS")],
+            "Set the brightness effect.",
+        ),
+        block(
+            "Scratch.Looks.changeGhostEffectBy",
+            "looks_changeeffectby",
+            None,
+            vec![arg("amount", "CHANGE", Value)],
+            vec![("EFFECT", "GHOST")],
+            "Change the ghost effect.",
+        ),
+        block(
+            "Scratch.Looks.setGhostEffectTo",
+            "looks_seteffectto",
+            None,
+            vec![arg("amount", "VALUE", Value)],
+            vec![("EFFECT", "GHOST")],
+            "Set the ghost effect.",
+        ),
+        block(
+            "Scratch.Sound.stopAll",
+            "sound_stopallsounds",
+            None,
+            vec![],
+            vec![],
+            "Stop all sounds.",
+        ),
+        block(
+            "Scratch.Sound.changeVolumeBy",
+            "sound_changevolumeby",
+            None,
+            vec![arg("amount", "VOLUME", Value)],
+            vec![],
+            "Change the volume.",
+        ),
+        block(
+            "Scratch.Sound.setVolumeTo",
+            "sound_setvolumeto",
+            None,
+            vec![arg("percent", "VOLUME", Value)],
+            vec![],
+            "Set the volume as a percentage.",
+        ),
+        block(
+            "Scratch.Sound.volume",
+            "sound_volume",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the volume percentage.",
+        ),
+        block(
+            "Scratch.Control.wait",
+            "control_wait",
+            None,
+            vec![arg("seconds", "DURATION", Value)],
+            vec![],
+            "Wait for a number of seconds.",
+        ),
+        block(
+            "Scratch.Control.waitUntil",
+            "control_wait_until",
+            None,
+            vec![arg("condition", "CONDITION", Boolean)],
+            vec![],
+            "Wait until a condition becomes true.",
+        ),
+        block(
+            "Scratch.Events.broadcast",
+            "event_broadcast",
+            None,
+            vec![menu_arg(
+                "message",
+                "BROADCAST_INPUT",
+                "event_broadcast_menu",
+                "BROADCAST_OPTION",
+                "message1",
+            )],
+            vec![],
+            "Broadcast a message to event scripts.",
+        ),
+        block(
+            "Scratch.Events.broadcastAndWait",
+            "event_broadcastandwait",
+            None,
+            vec![menu_arg(
+                "message",
+                "BROADCAST_INPUT",
+                "event_broadcast_menu",
+                "BROADCAST_OPTION",
+                "message1",
+            )],
+            vec![],
+            "Broadcast a message and wait for receiving scripts to finish.",
+        ),
+        block(
+            "Scratch.Control.stopAll",
+            "control_stop",
+            None,
+            vec![],
+            vec![("STOP_OPTION", "all")],
+            "Stop all scripts.",
+        ),
+        block(
+            "Scratch.Control.stopThisScript",
+            "control_stop",
+            None,
+            vec![],
+            vec![("STOP_OPTION", "this script")],
+            "Stop this script.",
+        ),
+        block(
+            "Scratch.Control.deleteThisClone",
+            "control_delete_this_clone",
+            None,
+            vec![],
+            vec![],
+            "Delete the current clone.",
+        ),
+        block(
+            "Scratch.Control.createCloneOf",
+            "control_create_clone_of",
+            None,
+            vec![menu_arg(
+                "target",
+                "CLONE_OPTION",
+                "control_create_clone_of_menu",
+                "CLONE_OPTION",
+                "_myself_",
+            )],
+            vec![],
+            "Create a clone of a sprite.",
+        ),
+        block(
+            "Scratch.Sensing.askAndWait",
+            "sensing_askandwait",
+            None,
+            vec![arg("question", "QUESTION", Value)],
+            vec![],
+            "Ask a question and wait for an answer.",
+        ),
+        block(
+            "Scratch.Sensing.answer",
+            "sensing_answer",
+            Some(Type::Text),
+            vec![],
+            vec![],
+            "Read the most recent answer.",
+        ),
+        block(
+            "Scratch.Sensing.mouseDown",
+            "sensing_mousedown",
+            Some(Type::Bool),
+            vec![],
+            vec![],
+            "Check whether the mouse button is pressed.",
+        ),
+        block(
+            "Scratch.Sensing.mouseX",
+            "sensing_mousex",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the mouse x position.",
+        ),
+        block(
+            "Scratch.Sensing.mouseY",
+            "sensing_mousey",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the mouse y position.",
+        ),
+        block(
+            "Scratch.Sensing.timer",
+            "sensing_timer",
+            Some(Type::Float),
+            vec![],
+            vec![],
+            "Read the timer in seconds.",
+        ),
+        block(
+            "Scratch.Sensing.resetTimer",
+            "sensing_resettimer",
+            None,
+            vec![],
+            vec![],
+            "Reset the timer.",
+        ),
+        block(
+            "Scratch.Sensing.touchingObject",
+            "sensing_touchingobject",
+            Some(Type::Bool),
+            vec![menu_arg(
+                "target",
+                "TOUCHINGOBJECTMENU",
+                "sensing_touchingobjectmenu",
+                "TOUCHINGOBJECTMENU",
+                "_mouse_",
+            )],
+            vec![],
+            "Check whether the sprite touches a target.",
+        ),
+        block(
+            "Scratch.Sensing.distanceTo",
+            "sensing_distanceto",
+            Some(Type::Float),
+            vec![menu_arg(
+                "target",
+                "DISTANCETOMENU",
+                "sensing_distancetomenu",
+                "DISTANCETOMENU",
+                "_mouse_",
+            )],
+            vec![],
+            "Read the distance to a target.",
+        ),
+        block(
+            "Scratch.Sensing.keyPressed",
+            "sensing_keypressed",
+            Some(Type::Bool),
+            vec![menu_arg(
+                "key",
+                "KEY_OPTION",
+                "sensing_keyoptions",
+                "KEY_OPTION",
+                "space",
+            )],
+            vec![],
+            "Check whether a key is pressed.",
+        ),
+        block(
+            "Scratch.Sensing.touchingColor",
+            "sensing_touchingcolor",
+            Some(Type::Bool),
+            vec![color_arg("color", "COLOR")],
+            vec![],
+            "Check whether the sprite touches a color.",
+        ),
+        block(
+            "Scratch.Sensing.colorIsTouchingColor",
+            "sensing_coloristouchingcolor",
+            Some(Type::Bool),
+            vec![
+                color_arg("color", "COLOR"),
+                color_arg("targetColor", "COLOR2"),
+            ],
+            vec![],
+            "Check whether one color touches another color.",
+        ),
+        block(
+            "Scratch.Operators.join",
+            "operator_join",
+            Some(Type::Text),
+            vec![
+                arg("left", "STRING1", Value),
+                arg("right", "STRING2", Value),
+            ],
+            vec![],
+            "Join two values as text.",
+        ),
+        block(
+            "Scratch.Operators.add",
+            "operator_add",
+            Some(Type::Float),
+            vec![arg("left", "NUM1", Value), arg("right", "NUM2", Value)],
+            vec![],
+            "Add two values.",
+        ),
+        block(
+            "Scratch.Operators.subtract",
+            "operator_subtract",
+            Some(Type::Float),
+            vec![arg("left", "NUM1", Value), arg("right", "NUM2", Value)],
+            vec![],
+            "Subtract one value from another.",
+        ),
+        block(
+            "Scratch.Operators.multiply",
+            "operator_multiply",
+            Some(Type::Float),
+            vec![arg("left", "NUM1", Value), arg("right", "NUM2", Value)],
+            vec![],
+            "Multiply two values.",
+        ),
+        block(
+            "Scratch.Operators.divide",
+            "operator_divide",
+            Some(Type::Float),
+            vec![arg("left", "NUM1", Value), arg("right", "NUM2", Value)],
+            vec![],
+            "Divide one value by another.",
+        ),
+        block(
+            "Scratch.Operators.equals",
+            "operator_equals",
+            Some(Type::Bool),
+            vec![
+                arg("left", "OPERAND1", Value),
+                arg("right", "OPERAND2", Value),
+            ],
+            vec![],
+            "Compare two values for equality.",
+        ),
+        block(
+            "Scratch.Operators.lessThan",
+            "operator_lt",
+            Some(Type::Bool),
+            vec![
+                arg("left", "OPERAND1", Value),
+                arg("right", "OPERAND2", Value),
+            ],
+            vec![],
+            "Check whether one value is less than another.",
+        ),
+        block(
+            "Scratch.Operators.greaterThan",
+            "operator_gt",
+            Some(Type::Bool),
+            vec![
+                arg("left", "OPERAND1", Value),
+                arg("right", "OPERAND2", Value),
+            ],
+            vec![],
+            "Check whether one value is greater than another.",
+        ),
+        block(
+            "Scratch.Operators.letterOf",
+            "operator_letter_of",
+            Some(Type::Text),
+            vec![arg("index", "LETTER", Value), arg("text", "STRING", Value)],
+            vec![],
+            "Read one letter from text.",
+        ),
+        block(
+            "Scratch.Operators.length",
+            "operator_length",
+            Some(Type::Float),
+            vec![arg("text", "STRING", Value)],
+            vec![],
+            "Count the characters in text.",
+        ),
+        block(
+            "Scratch.Operators.contains",
+            "operator_contains",
+            Some(Type::Bool),
+            vec![arg("text", "STRING1", Value), arg("part", "STRING2", Value)],
+            vec![],
+            "Check whether text contains another value.",
+        ),
+        block(
+            "Scratch.Operators.random",
+            "operator_random",
+            Some(Type::Float),
+            vec![arg("from", "FROM", Value), arg("to", "TO", Value)],
+            vec![],
+            "Choose a random number in a range.",
+        ),
+        block(
+            "Scratch.Operators.round",
+            "operator_round",
+            Some(Type::Int),
+            vec![arg("number", "NUM", Value)],
+            vec![],
+            "Round a number to the nearest integer.",
+        ),
+        block(
+            "Scratch.Operators.modulo",
+            "operator_mod",
+            Some(Type::Float),
+            vec![arg("left", "NUM1", Value), arg("right", "NUM2", Value)],
+            vec![],
+            "Find the remainder after division.",
+        ),
+        block(
+            "Scratch.Operators.and",
+            "operator_and",
+            Some(Type::Bool),
+            vec![
+                arg("left", "OPERAND1", Boolean),
+                arg("right", "OPERAND2", Boolean),
+            ],
+            vec![],
+            "Return true when both conditions are true.",
+        ),
+        block(
+            "Scratch.Operators.or",
+            "operator_or",
+            Some(Type::Bool),
+            vec![
+                arg("left", "OPERAND1", Boolean),
+                arg("right", "OPERAND2", Boolean),
+            ],
+            vec![],
+            "Return true when either condition is true.",
+        ),
+        block(
+            "Scratch.Operators.not",
+            "operator_not",
+            Some(Type::Bool),
+            vec![arg("condition", "OPERAND", Boolean)],
+            vec![],
+            "Invert a condition.",
+        ),
+        block(
+            "Scratch.Operators.absolute",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "abs")],
+            "Return the absolute value.",
+        ),
+        block(
+            "Scratch.Operators.floor",
+            "operator_mathop",
+            Some(Type::Int),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "floor")],
+            "Round down to an integer.",
+        ),
+        block(
+            "Scratch.Operators.ceiling",
+            "operator_mathop",
+            Some(Type::Int),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "ceiling")],
+            "Round up to an integer.",
+        ),
+        block(
+            "Scratch.Operators.sqrt",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "sqrt")],
+            "Return the square root.",
+        ),
+        block(
+            "Scratch.Operators.sin",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "sin")],
+            "Return the sine in degrees.",
+        ),
+        block(
+            "Scratch.Operators.cos",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "cos")],
+            "Return the cosine in degrees.",
+        ),
+        block(
+            "Scratch.Operators.tan",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "tan")],
+            "Return the tangent in degrees.",
+        ),
+        block(
+            "Scratch.Operators.asin",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "asin")],
+            "Return the inverse sine in degrees.",
+        ),
+        block(
+            "Scratch.Operators.acos",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "acos")],
+            "Return the inverse cosine in degrees.",
+        ),
+        block(
+            "Scratch.Operators.atan",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "atan")],
+            "Return the inverse tangent in degrees.",
+        ),
+        block(
+            "Scratch.Operators.ln",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "ln")],
+            "Return the natural logarithm.",
+        ),
+        block(
+            "Scratch.Operators.log",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "log")],
+            "Return the base-10 logarithm.",
+        ),
+        block(
+            "Scratch.Operators.exponentE",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "e ^")],
+            "Raise e to a power.",
+        ),
+        block(
+            "Scratch.Operators.exponent10",
+            "operator_mathop",
+            Some(Type::Float),
+            vec![arg("number", "NUM", Value)],
+            vec![("OPERATOR", "10 ^")],
+            "Raise 10 to a power.",
+        ),
+    ]
+}
+
+pub fn builtin_block_descriptions() -> Vec<BuiltinBlockDescription> {
+    builtin_blocks()
+        .into_iter()
+        .map(|block| {
+            let (category, member) = block
+                .name
+                .strip_prefix("Scratch.")
+                .unwrap()
+                .split_once('.')
+                .unwrap();
+            let arguments = block
+                .arguments
+                .iter()
+                .map(|argument| {
+                    format!(
+                        "{}: {}",
+                        argument.name,
+                        if argument.kind == BuiltinInputKind::Boolean {
+                            "bool"
+                        } else if argument.kind == BuiltinInputKind::Color {
+                            "text"
+                        } else {
+                            "value"
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let result = block
+                .result
+                .map(|ty| format!(" -> {}", ty.name()))
+                .unwrap_or_default();
+            BuiltinBlockDescription {
+                name: block.name,
+                category,
+                member,
+                signature: format!("{member}({arguments}){result}"),
+                description: block.description,
+            }
+        })
+        .collect()
+}
+
+fn builtin_block(name: &str) -> Option<BuiltinBlock> {
+    builtin_blocks()
+        .into_iter()
+        .find(|block| block.name == name)
+}
+
 #[derive(Clone, Debug)]
 struct Parameter {
     token: Token,
@@ -315,6 +1430,7 @@ struct Expr {
 
 fn constant_field_value(expression: &Expr) -> Option<(Type, Value)> {
     match &expression.kind {
+        ExprKind::Text(value) => Some((Type::Text, json!(value))),
         ExprKind::Number(value) => Some((
             if value.contains('.') {
                 Type::Float
@@ -347,6 +1463,7 @@ fn constant_field_value(expression: &Expr) -> Option<(Type, Value)> {
 enum ExprKind {
     Number(String),
     Boolean(bool),
+    Text(String),
     ObjectInit {
         class_id: u32,
         class_name: String,
@@ -373,11 +1490,25 @@ enum ExprKind {
         name: String,
         arguments: Vec<Expr>,
         info: Option<FunctionInfo>,
+        builtin: Option<BuiltinBlock>,
     },
 }
 
 #[derive(Clone, Debug)]
 enum Stmt {
+    Use {
+        token: Token,
+        namespace: String,
+        alias: Option<String>,
+        alias_token: Option<Token>,
+        members: Vec<(Token, String)>,
+        scope: String,
+    },
+    Namespace {
+        name_token: Token,
+        path: String,
+        body: Vec<Stmt>,
+    },
     Class {
         name_token: Token,
         name: String,
@@ -396,6 +1527,7 @@ enum Stmt {
         name: String,
         arguments: Vec<Expr>,
         info: Option<FunctionInfo>,
+        builtin: Option<BuiltinBlock>,
     },
     Return {
         token: Token,
@@ -442,11 +1574,16 @@ enum Stmt {
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
+    namespace: Vec<String>,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, index: 0 }
+        Self {
+            tokens,
+            index: 0,
+            namespace: Vec::new(),
+        }
     }
     fn current(&self) -> &Token {
         &self.tokens[self.index]
@@ -486,7 +1623,11 @@ impl Parser {
             if self.at("}") {
                 return Err(diagnostic(self.current(), "unexpected '}'"));
             }
-            if self.at("class") {
+            if self.at("use") {
+                statements.push(self.use_declaration()?);
+            } else if self.at("ns") {
+                statements.push(self.namespace_declaration()?);
+            } else if self.at("class") {
                 statements.push(self.class_declaration()?);
             } else if self.at("fn")
                 || (self.at("const") && self.tokens[self.index + 1].text == "fn")
@@ -500,10 +1641,137 @@ impl Parser {
         Ok(statements)
     }
 
+    fn namespace_path(&self) -> String {
+        self.namespace.join(".")
+    }
+
+    fn qualified_name(&self, leaf: &str) -> String {
+        if self.namespace.is_empty() {
+            leaf.to_string()
+        } else {
+            format!("{}.{}", self.namespace_path(), leaf)
+        }
+    }
+
+    fn use_declaration(&mut self) -> Result<Stmt, String> {
+        let token = self.expect("use")?;
+        let mut path = self.expect_identifier()?.text;
+        let mut members = Vec::new();
+        let mut alias = None;
+        let mut alias_token = None;
+        while self.at(".") {
+            self.take();
+            if self.at("{") {
+                self.take();
+                if !self.at("}") {
+                    loop {
+                        let member = self.expect_identifier()?;
+                        members.push((member.clone(), member.text));
+                        if !self.at(",") {
+                            break;
+                        }
+                        self.take();
+                    }
+                }
+                self.expect("}")?;
+                break;
+            }
+            path.push('.');
+            path.push_str(&self.expect_identifier()?.text);
+        }
+        if self.at("as") {
+            self.take();
+            let name = self.expect_identifier()?;
+            alias = Some(name.text.clone());
+            alias_token = Some(name);
+            if self.at(".")
+                && self
+                    .tokens
+                    .get(self.index + 1)
+                    .map(|token| token.text.as_str())
+                    == Some("{")
+            {
+                self.take();
+                self.take();
+                if !self.at("}") {
+                    loop {
+                        let member = self.expect_identifier()?;
+                        members.push((member.clone(), member.text));
+                        if !self.at(",") {
+                            break;
+                        }
+                        self.take();
+                    }
+                }
+                self.expect("}")?;
+            }
+        }
+        let alias_at_end = self.at("as");
+        if alias_at_end {
+            self.take();
+            let name = self.expect_identifier()?;
+            alias = Some(name.text.clone());
+            alias_token = Some(name);
+        }
+        Ok(Stmt::Use {
+            token,
+            namespace: path,
+            alias,
+            alias_token,
+            members,
+            scope: self.namespace_path(),
+        })
+    }
+
+    fn namespace_declaration(&mut self) -> Result<Stmt, String> {
+        self.expect("ns")?;
+        let name_token = self.expect_identifier()?;
+        let name = name_token.text.clone();
+        let path = self.qualified_name(&name);
+        self.expect("{")?;
+        self.namespace.push(name.clone());
+        let mut body = Vec::new();
+        self.semicolons();
+        while !self.at("}") {
+            if self.current().kind == TokenKind::Eof {
+                self.namespace.pop();
+                return Err(diagnostic(
+                    self.current(),
+                    "expected '}' before end of file",
+                ));
+            }
+            if self.at("use") {
+                body.push(self.use_declaration()?);
+            } else if self.at("ns") {
+                body.push(self.namespace_declaration()?);
+            } else if self.at("class") {
+                body.push(self.class_declaration()?);
+            } else if self.at("fn")
+                || (self.at("const") && self.tokens[self.index + 1].text == "fn")
+            {
+                body.push(self.function_declaration()?);
+            } else {
+                self.namespace.pop();
+                return Err(diagnostic(
+                    self.current(),
+                    "namespace bodies may contain only use, namespace, class, and function declarations",
+                ));
+            }
+            self.semicolons();
+        }
+        self.take();
+        self.namespace.pop();
+        Ok(Stmt::Namespace {
+            name_token,
+            path,
+            body,
+        })
+    }
+
     fn class_declaration(&mut self) -> Result<Stmt, String> {
         self.expect("class")?;
         let name_token = self.expect_identifier()?;
-        let name = name_token.text.clone();
+        let name = self.qualified_name(&name_token.text);
         self.expect("{")?;
         let mut fields = Vec::new();
         self.semicolons();
@@ -550,7 +1818,7 @@ impl Parser {
         }
         self.expect("fn")?;
         let name_token = self.expect_identifier()?;
-        let name = name_token.text.clone();
+        let name = self.qualified_name(&name_token.text);
         self.expect("(")?;
         let mut parameters = Vec::new();
         if !self.at(")") {
@@ -640,6 +1908,22 @@ impl Parser {
                 symbol: None,
             });
         }
+        if self.current().kind == TokenKind::Identifier && self.tokens[self.index + 1].text == "." {
+            let expression = self.expression(1)?;
+            if let ExprKind::Call {
+                name, arguments, ..
+            } = expression.kind
+            {
+                return Ok(Stmt::Call {
+                    token: expression.token,
+                    name,
+                    arguments,
+                    info: None,
+                    builtin: None,
+                });
+            }
+            return Err(diagnostic(&expression.token, "expected a function call"));
+        }
         if self.current().kind == TokenKind::Identifier && self.tokens[self.index + 1].text == "(" {
             return self.call_statement();
         }
@@ -669,6 +1953,7 @@ impl Parser {
             name,
             arguments,
             info: None,
+            builtin: None,
         })
     }
 
@@ -808,6 +2093,14 @@ impl Parser {
                     }),
                 })
             }
+            TokenKind::String => {
+                self.take();
+                Ok(Expr {
+                    kind: ExprKind::Text(token.text.clone()),
+                    token,
+                    ty: Some(Type::Text),
+                })
+            }
             TokenKind::Identifier if token.text == "true" || token.text == "false" => {
                 self.take();
                 Ok(Expr {
@@ -836,6 +2129,7 @@ impl Parser {
                             name: token.text.clone(),
                             arguments,
                             info: None,
+                            builtin: None,
                         },
                         token,
                         ty: None,
@@ -860,10 +2154,22 @@ impl Parser {
             self.take();
             let member = self.expect_identifier()?;
             if self.at("(") {
-                return Err(diagnostic(
-                    &member,
-                    "instance methods are not implemented yet",
-                ));
+                let name = qualified_expression_name(&expression)
+                    .map(|prefix| format!("{prefix}.{}", member.text))
+                    .unwrap_or_else(|| member.text.clone());
+                let token = member.clone();
+                let arguments = self.call_arguments()?;
+                expression = Expr {
+                    kind: ExprKind::Call {
+                        name,
+                        arguments,
+                        info: None,
+                        builtin: None,
+                    },
+                    token,
+                    ty: None,
+                };
+                continue;
             }
             let token = member.clone();
             expression = Expr {
@@ -878,6 +2184,32 @@ impl Parser {
         }
         Ok(expression)
     }
+
+    fn call_arguments(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect("(")?;
+        let mut arguments = Vec::new();
+        if !self.at(")") {
+            loop {
+                arguments.push(self.expression(1)?);
+                if !self.at(",") {
+                    break;
+                }
+                self.take();
+            }
+        }
+        self.expect(")")?;
+        Ok(arguments)
+    }
+}
+
+fn qualified_expression_name(expression: &Expr) -> Option<String> {
+    match &expression.kind {
+        ExprKind::Name { value, .. } => Some(value.clone()),
+        ExprKind::Member { object, name, .. } => {
+            Some(format!("{}.{}", qualified_expression_name(object)?, name))
+        }
+        _ => None,
+    }
 }
 
 struct TypeChecker {
@@ -888,6 +2220,8 @@ struct TypeChecker {
     functions: HashMap<String, FunctionInfo>,
     classes: HashMap<String, ClassInfo>,
     objects: HashMap<String, ObjectInstance>,
+    namespaces: std::collections::HashSet<String>,
+    imports: HashMap<String, HashMap<String, String>>,
     current_function: Option<FunctionInfo>,
 }
 
@@ -901,33 +2235,39 @@ impl TypeChecker {
             functions: HashMap::new(),
             classes: HashMap::new(),
             objects: HashMap::new(),
+            namespaces: std::collections::HashSet::new(),
+            imports: HashMap::new(),
             current_function: None,
         }
     }
 
     fn check(mut self, statements: &mut [Stmt]) -> Result<Vec<Symbol>, String> {
+        self.collect_namespace_paths(statements)?;
+        self.collect_imports(statements)?;
         self.register_classes(statements)?;
         self.register_functions(statements)?;
+        self.validate_imports(statements)?;
         self.check_statements(statements, false)?;
-        for statement in statements.iter_mut() {
-            if let Stmt::Function {
-                name_token,
-                parameters,
-                body,
-                info,
-                ..
-            } = statement
-            {
-                self.check_function(parameters, body, info.as_ref().unwrap(), name_token)?;
-            }
-        }
+        self.check_function_declarations(statements)?;
         validate_recursive_return_functions(statements)?;
         Ok(self.symbols)
     }
 
     fn register_classes(&mut self, statements: &[Stmt]) -> Result<(), String> {
         let mut next_class_id = 0u32;
+        self.register_classes_in(statements, &mut next_class_id)
+    }
+
+    fn register_classes_in(
+        &mut self,
+        statements: &[Stmt],
+        next_class_id: &mut u32,
+    ) -> Result<(), String> {
         for statement in statements {
+            if let Stmt::Namespace { body, .. } = statement {
+                self.register_classes_in(body, next_class_id)?;
+                continue;
+            }
             let Stmt::Class {
                 name_token,
                 name,
@@ -953,7 +2293,7 @@ impl TypeChecker {
                 let Some((initializer_type, _)) = constant_field_value(&field.initializer) else {
                     return Err(diagnostic(
                         &field.initializer.token,
-                        "class field defaults must be numeric or boolean literals",
+                        "class field defaults must be numeric, boolean, or text literals",
                     ));
                 };
                 if !Self::assignable(field.ty, initializer_type) {
@@ -972,18 +2312,30 @@ impl TypeChecker {
                 name.clone(),
                 ClassInfo {
                     name: name.clone(),
-                    id: next_class_id,
+                    id: *next_class_id,
                     fields: fields.clone(),
                 },
             );
-            next_class_id += 1;
+            *next_class_id += 1;
         }
         Ok(())
     }
 
     fn register_functions(&mut self, statements: &mut [Stmt]) -> Result<(), String> {
         let mut function_index = 0usize;
+        self.register_functions_in(statements, &mut function_index)
+    }
+
+    fn register_functions_in(
+        &mut self,
+        statements: &mut [Stmt],
+        function_index: &mut usize,
+    ) -> Result<(), String> {
         for statement in statements {
+            if let Stmt::Namespace { body, .. } = statement {
+                self.register_functions_in(body, function_index)?;
+                continue;
+            }
             let Stmt::Function {
                 name_token,
                 name,
@@ -1013,7 +2365,7 @@ impl TypeChecker {
                 .enumerate()
                 .map(|(argument_index, parameter)| FunctionArgument {
                     name: parameter.name.clone(),
-                    id: format!("a{function_index:08x}_{argument_index:04x}"),
+                    id: format!("a{:08x}_{argument_index:04x}", *function_index),
                     ty: parameter.ty,
                 })
                 .collect::<Vec<_>>();
@@ -1021,6 +2373,7 @@ impl TypeChecker {
             for argument in &arguments {
                 proccode.push_str(match argument.ty {
                     Type::Bool => " %b",
+                    Type::Text | Type::Any => " %s",
                     Type::Int | Type::Float | Type::Class(_) => " %n",
                 });
             }
@@ -1046,7 +2399,7 @@ impl TypeChecker {
             };
             let function_info = FunctionInfo {
                 name: name.clone(),
-                symbol_id: format!("f{:019x}", function_index + 1),
+                symbol_id: format!("f{:019x}", *function_index + 1),
                 signature,
                 proccode,
                 arguments,
@@ -1056,9 +2409,199 @@ impl TypeChecker {
             };
             *info = Some(function_info.clone());
             self.functions.insert(name.clone(), function_info);
-            function_index += 1;
+            *function_index += 1;
         }
         Ok(())
+    }
+
+    fn check_function_declarations(&mut self, statements: &mut [Stmt]) -> Result<(), String> {
+        for statement in statements {
+            match statement {
+                Stmt::Namespace { body, .. } => self.check_function_declarations(body)?,
+                Stmt::Function {
+                    name_token,
+                    parameters,
+                    body,
+                    info: Some(info),
+                    ..
+                } => {
+                    self.check_function(parameters, body, info, name_token)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_namespace_paths(&mut self, statements: &[Stmt]) -> Result<(), String> {
+        for block in builtin_blocks() {
+            let (category, _) = block
+                .name
+                .strip_prefix("Scratch.")
+                .unwrap()
+                .split_once('.')
+                .unwrap();
+            self.namespaces.insert("Scratch".to_string());
+            self.namespaces.insert(format!("Scratch.{category}"));
+        }
+        for statement in statements {
+            if let Stmt::Namespace {
+                name_token,
+                path,
+                body,
+                ..
+            } = statement
+            {
+                if !self.namespaces.insert(path.clone()) {
+                    return Err(diagnostic(
+                        name_token,
+                        format!("namespace {path:?} is already declared"),
+                    ));
+                }
+                self.collect_namespace_paths(body)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_imports(&mut self, statements: &[Stmt]) -> Result<(), String> {
+        for statement in statements {
+            match statement {
+                Stmt::Namespace { body, .. } => self.collect_imports(body)?,
+                Stmt::Use {
+                    token,
+                    namespace,
+                    alias,
+                    alias_token,
+                    members,
+                    scope,
+                } => {
+                    let mut additions = Vec::new();
+                    if !members.is_empty() {
+                        for (_, member) in members {
+                            let local = if let Some(alias) = alias {
+                                format!("{alias}.{member}")
+                            } else {
+                                member.clone()
+                            };
+                            additions.push((local, format!("{namespace}.{member}")));
+                        }
+                    } else if let Some(alias) = alias {
+                        additions.push((alias.clone(), namespace.clone()));
+                    } else {
+                        let name = namespace
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(namespace)
+                            .to_string();
+                        additions.push((name, namespace.clone()));
+                    }
+                    let scope_imports = self.imports.entry(scope.clone()).or_default();
+                    for (local, target) in additions {
+                        if scope_imports.insert(local.clone(), target).is_some() {
+                            return Err(diagnostic(
+                                alias_token.as_ref().unwrap_or(token),
+                                format!(
+                                    "import name {local:?} is already declared in this namespace"
+                                ),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_imports(&self, statements: &[Stmt]) -> Result<(), String> {
+        for statement in statements {
+            match statement {
+                Stmt::Namespace { body, .. } => self.validate_imports(body)?,
+                Stmt::Use {
+                    token,
+                    namespace,
+                    members,
+                    ..
+                } => {
+                    if members.is_empty() {
+                        let final_path_is_symbol = self.functions.contains_key(namespace)
+                            || self.classes.contains_key(namespace)
+                            || builtin_block(namespace).is_some();
+                        if !self.namespaces.contains(namespace) && !final_path_is_symbol {
+                            return Err(diagnostic(
+                                token,
+                                format!("unknown namespace or symbol {namespace:?}"),
+                            ));
+                        }
+                    } else {
+                        if !self.namespaces.contains(namespace) {
+                            return Err(diagnostic(
+                                token,
+                                format!("unknown namespace {namespace:?}"),
+                            ));
+                        }
+                        for (member_token, member) in members {
+                            let target = format!("{namespace}.{member}");
+                            if !self.functions.contains_key(&target)
+                                && !self.classes.contains_key(&target)
+                                && builtin_block(&target).is_none()
+                            {
+                                return Err(diagnostic(
+                                    member_token,
+                                    format!("unknown function or class {target:?}"),
+                                ));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn import_for(&self, name: &str, scope: &str) -> Option<String> {
+        let mut scopes = vec![scope.to_string()];
+        let mut parent = scope;
+        while let Some((prefix, _)) = parent.rsplit_once('.') {
+            scopes.push(prefix.to_string());
+            parent = prefix;
+        }
+        scopes.push(String::new());
+        for lexical_scope in scopes {
+            if let Some(imports) = self.imports.get(&lexical_scope) {
+                if let Some(target) = imports.get(name) {
+                    return Some(target.clone());
+                }
+                if let Some((prefix, suffix)) = name.split_once('.') {
+                    if let Some(target) = imports.get(prefix) {
+                        return Some(format!("{target}.{suffix}"));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_name(&self, name: &str) -> String {
+        let scope = self
+            .current_function
+            .as_ref()
+            .and_then(|function| function.name.rsplit_once('.').map(|(scope, _)| scope))
+            .unwrap_or("");
+        if !name.contains('.') {
+            let local = if scope.is_empty() {
+                name.to_string()
+            } else {
+                format!("{scope}.{name}")
+            };
+            if self.functions.contains_key(&local) || self.classes.contains_key(&local) {
+                return local;
+            }
+        }
+        self.import_for(name, scope)
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn check_function(
@@ -1154,6 +2697,7 @@ impl TypeChecker {
 
     fn check_statement(&mut self, statement: &mut Stmt) -> Result<(), String> {
         match statement {
+            Stmt::Use { .. } | Stmt::Namespace { .. } => Ok(()),
             Stmt::Class { .. } => Ok(()),
             Stmt::Function { .. } => Ok(()),
             Stmt::Return { token, value } => {
@@ -1184,17 +2728,34 @@ impl TypeChecker {
                 name,
                 arguments,
                 info,
+                builtin,
             } => {
+                let resolved_name = self.resolve_name(name);
+                if let Some(block) = builtin_block(&resolved_name) {
+                    if block.result.is_some() {
+                        return Err(diagnostic(
+                            token,
+                            format!(
+                                "Scratch block {:?} returns a value and must be used as an expression",
+                                block.name
+                            ),
+                        ));
+                    }
+                    self.check_builtin_arguments(&block, arguments, token)?;
+                    *name = resolved_name;
+                    *builtin = Some(block);
+                    return Ok(());
+                }
                 let signature = self
                     .functions
-                    .get(name)
+                    .get(&resolved_name)
                     .cloned()
                     .ok_or_else(|| diagnostic(token, format!("unknown function {name:?}")))?;
                 if arguments.len() != signature.arguments.len() {
                     return Err(diagnostic(
                         token,
                         format!(
-                            "function {name:?} expects {} argument(s), got {}",
+                            "function {resolved_name:?} expects {} argument(s), got {}",
                             signature.arguments.len(),
                             arguments.len()
                         ),
@@ -1206,7 +2767,7 @@ impl TypeChecker {
                         return Err(diagnostic(
                             &argument.token,
                             format!(
-                                "cannot pass {} to {} parameter {:?} of function {name:?}",
+                                "cannot pass {} to {} parameter {:?} of function {resolved_name:?}",
                                 actual.name(),
                                 parameter.ty.name(),
                                 parameter.name
@@ -1214,6 +2775,7 @@ impl TypeChecker {
                         ));
                     }
                 }
+                *name = resolved_name;
                 *info = Some(signature);
                 Ok(())
             }
@@ -1502,15 +3064,64 @@ impl TypeChecker {
     }
 
     fn assignable(expected: Type, actual: Type) -> bool {
-        expected == actual || (expected == Type::Float && actual == Type::Int)
+        expected == Type::Any
+            || expected == actual
+            || (expected == Type::Float && actual == Type::Int)
+    }
+
+    fn check_builtin_arguments(
+        &mut self,
+        builtin: &BuiltinBlock,
+        arguments: &mut [Expr],
+        token: &Token,
+    ) -> Result<(), String> {
+        if arguments.len() != builtin.arguments.len() {
+            return Err(diagnostic(
+                token,
+                format!(
+                    "Scratch block {:?} expects {} argument(s), got {}",
+                    builtin.name,
+                    builtin.arguments.len(),
+                    arguments.len()
+                ),
+            ));
+        }
+        for (argument, spec) in arguments.iter_mut().zip(&builtin.arguments) {
+            let actual = self.check_expr(argument)?;
+            let valid = match spec.kind {
+                BuiltinInputKind::Boolean => actual == Type::Bool,
+                BuiltinInputKind::Color => actual == Type::Text,
+                BuiltinInputKind::Value => !matches!(actual, Type::Class(_)),
+            };
+            if !valid {
+                let expected = match spec.kind {
+                    BuiltinInputKind::Boolean => "bool",
+                    BuiltinInputKind::Color => "text",
+                    BuiltinInputKind::Value => "Scratch value",
+                };
+                return Err(diagnostic(
+                    &argument.token,
+                    format!(
+                        "cannot pass {} to {expected} input {:?} of {:?}",
+                        actual.name(),
+                        spec.name,
+                        builtin.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn check_expr(&mut self, expression: &mut Expr) -> Result<Type, String> {
-        if let ExprKind::Call {
-            name, arguments, ..
-        } = &expression.kind
+        let resolved_call = match &expression.kind {
+            ExprKind::Call { name, .. } => Some(self.resolve_name(name)),
+            _ => None,
+        };
+        if let (Some(resolved_name), ExprKind::Call { arguments, .. }) =
+            (resolved_call.as_ref(), &expression.kind)
         {
-            if let Some(class) = self.classes.get(name) {
+            if let Some(class) = self.classes.get(resolved_name) {
                 if !arguments.is_empty() {
                     return Err(diagnostic(
                         &expression.token,
@@ -1536,6 +3147,7 @@ impl TypeChecker {
                 }
             }
             ExprKind::Boolean(_) => Type::Bool,
+            ExprKind::Text(_) => Type::Text,
             ExprKind::ObjectInit { class_id, .. } => Type::Class(*class_id),
             ExprKind::Name { value, symbol } => {
                 let resolved = self.lookup(value, &expression.token)?;
@@ -1583,8 +3195,23 @@ impl TypeChecker {
                 name,
                 arguments,
                 info,
+                builtin,
             } => {
-                let signature = self.functions.get(name).cloned().ok_or_else(|| {
+                let resolved_name = resolved_call.unwrap_or_else(|| name.clone());
+                *name = resolved_name.clone();
+                if let Some(block) = builtin_block(&resolved_name) {
+                    let Some(result_type) = block.result else {
+                        return Err(diagnostic(
+                            &expression.token,
+                            format!("Scratch command {:?} does not return a value", block.name),
+                        ));
+                    };
+                    self.check_builtin_arguments(&block, arguments, &expression.token)?;
+                    *builtin = Some(block);
+                    expression.ty = Some(result_type);
+                    return Ok(result_type);
+                }
+                let signature = self.functions.get(&resolved_name).cloned().ok_or_else(|| {
                     diagnostic(&expression.token, format!("unknown function {name:?}"))
                 })?;
                 let Some(return_type) = signature.return_type else {
@@ -1597,7 +3224,7 @@ impl TypeChecker {
                     return Err(diagnostic(
                         &expression.token,
                         format!(
-                            "function {name:?} expects {} argument(s), got {}",
+                            "function {resolved_name:?} expects {} argument(s), got {}",
                             signature.arguments.len(),
                             arguments.len()
                         ),
@@ -1609,7 +3236,7 @@ impl TypeChecker {
                         return Err(diagnostic(
                             &argument.token,
                             format!(
-                                "cannot pass {} to {} parameter {:?} of function {name:?}",
+                                "cannot pass {} to {} parameter {:?} of function {resolved_name:?}",
                                 actual.name(),
                                 parameter.ty.name(),
                                 parameter.name
@@ -1740,6 +3367,7 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
         }
         ExprKind::Number(_)
         | ExprKind::Boolean(_)
+        | ExprKind::Text(_)
         | ExprKind::ObjectInit { .. }
         | ExprKind::Name { .. } => {}
     }
@@ -1748,6 +3376,8 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
 fn collect_statement_calls(statements: &[Stmt], calls: &mut Vec<String>) {
     for statement in statements {
         match statement {
+            Stmt::Use { .. } => {}
+            Stmt::Namespace { body, .. } => collect_statement_calls(body, calls),
             Stmt::Class { .. } => {}
             Stmt::Function { body, .. } => collect_statement_calls(body, calls),
             Stmt::Call {
@@ -1807,24 +3437,36 @@ fn reaches_function(
 
 fn validate_recursive_return_functions(statements: &[Stmt]) -> Result<(), String> {
     let mut graph = HashMap::new();
-    for statement in statements {
-        if let Stmt::Function { name, body, .. } = statement {
-            let mut calls = Vec::new();
-            collect_statement_calls(body, &mut calls);
-            graph.insert(name.clone(), calls);
+    fn collect<'a>(
+        statements: &'a [Stmt],
+        graph: &mut HashMap<String, Vec<String>>,
+        returned: &mut Vec<(&'a Token, String)>,
+    ) {
+        for statement in statements {
+            match statement {
+                Stmt::Namespace { body, .. } => collect(body, graph, returned),
+                Stmt::Function {
+                    name_token,
+                    name,
+                    body,
+                    return_type,
+                    ..
+                } => {
+                    let mut calls = Vec::new();
+                    collect_statement_calls(body, &mut calls);
+                    graph.insert(name.clone(), calls);
+                    if return_type.is_some() {
+                        returned.push((name_token, name.clone()));
+                    }
+                }
+                _ => {}
+            }
         }
     }
-    for statement in statements {
-        let Stmt::Function {
-            name_token,
-            name,
-            return_type: Some(_),
-            ..
-        } = statement
-        else {
-            continue;
-        };
-        if reaches_function(name, name, &graph, &mut vec![name.clone()]) {
+    let mut returned = Vec::new();
+    collect(statements, &mut graph, &mut returned);
+    for (name_token, name) in returned {
+        if reaches_function(&name, &name, &graph, &mut vec![name.clone()]) {
             return Err(diagnostic(
                 name_token,
                 format!(
@@ -1900,7 +3542,10 @@ fn lower_statement_list(
     for mut statement in source_statements {
         let mut before = Vec::new();
         match &mut statement {
-            Stmt::Class { .. } => {}
+            Stmt::Use { .. } | Stmt::Class { .. } => {}
+            Stmt::Namespace { body, .. } => {
+                lower_statement_list(body, symbols, allocator)?;
+            }
             Stmt::Function { body, .. } => {
                 lower_statement_list(body, symbols, allocator)?;
             }
@@ -1961,9 +3606,13 @@ fn lower_expression(
             name,
             arguments,
             info,
+            builtin,
         } => {
             for argument in arguments.iter_mut() {
                 lower_expression(argument, before, symbols, allocator)?;
+            }
+            if builtin.is_some() {
+                return Ok(());
             }
             let info = info
                 .clone()
@@ -1981,6 +3630,7 @@ fn lower_expression(
                 name: name.clone(),
                 arguments: arguments.clone(),
                 info: Some(info),
+                builtin: None,
             });
             let returned_value = Expr {
                 kind: ExprKind::Name {
@@ -2006,6 +3656,7 @@ fn lower_expression(
         ExprKind::Member { .. }
         | ExprKind::Number(_)
         | ExprKind::Boolean(_)
+        | ExprKind::Text(_)
         | ExprKind::ObjectInit { .. }
         | ExprKind::Name { .. } => {}
     }
@@ -2014,6 +3665,7 @@ fn lower_expression(
 
 struct ScratchBuilder {
     blocks: Map<String, Value>,
+    broadcasts: Map<String, Value>,
     next_id: usize,
 }
 
@@ -2021,12 +3673,26 @@ impl ScratchBuilder {
     fn new() -> Self {
         Self {
             blocks: Map::new(),
+            broadcasts: Map::new(),
             next_id: 0,
         }
     }
     fn next_id(&mut self) -> String {
         self.next_id += 1;
         format!("b{:019x}", self.next_id)
+    }
+
+    fn broadcast_id(&mut self, name: &str) -> String {
+        if let Some((id, _)) = self
+            .broadcasts
+            .iter()
+            .find(|(_, value)| value.as_str() == Some(name))
+        {
+            return id.clone();
+        }
+        let id = format!("broadcast_{:019x}", self.broadcasts.len() + 1);
+        self.broadcasts.insert(id.clone(), json!(name));
+        id
     }
 
     fn block(
@@ -2053,6 +3719,59 @@ impl ScratchBuilder {
         self.blocks.get_mut(block_id).unwrap()["inputs"][name] = value;
     }
 
+    fn emit_builtin(
+        &mut self,
+        builtin: &BuiltinBlock,
+        arguments: &[Expr],
+        parent: &str,
+    ) -> Result<String, String> {
+        let fields = builtin
+            .fields
+            .iter()
+            .map(|(name, value)| (name.to_string(), json!([value, null])))
+            .collect::<Map<String, Value>>();
+        let id = self.block(builtin.opcode, Some(parent), false, Value::Object(fields));
+        for (argument, spec) in arguments.iter().zip(&builtin.arguments) {
+            let input = if let Some(menu) = &spec.menu {
+                let selection = if let ExprKind::Text(value) = &argument.kind {
+                    value.as_str()
+                } else {
+                    menu.default
+                };
+                let field_value = if menu.opcode == "event_broadcast_menu" {
+                    json!([selection, self.broadcast_id(selection)])
+                } else {
+                    json!([selection, null])
+                };
+                let mut menu_fields = Map::new();
+                menu_fields.insert(menu.field.to_string(), field_value);
+                let menu_id = self.block(menu.opcode, Some(&id), false, Value::Object(menu_fields));
+                self.blocks.get_mut(&menu_id).unwrap()["shadow"] = json!(true);
+                if matches!(&argument.kind, ExprKind::Text(_)) {
+                    json!([1, menu_id])
+                } else {
+                    let reporter = self.reporter(argument, &id)?;
+                    json!([3, reporter, menu_id])
+                }
+            } else {
+                match spec.kind {
+                    BuiltinInputKind::Boolean => self.boolean_input(argument, &id)?,
+                    BuiltinInputKind::Color => {
+                        if let ExprKind::Text(value) = &argument.kind {
+                            json!([1, [9, value]])
+                        } else {
+                            let reporter = self.reporter(argument, &id)?;
+                            json!([3, reporter, [9, "#000000"]])
+                        }
+                    }
+                    BuiltinInputKind::Value => self.value_input(argument, &id)?,
+                }
+            };
+            self.input(&id, spec.input, input);
+        }
+        Ok(id)
+    }
+
     fn sequence(
         &mut self,
         statements: &[Stmt],
@@ -2062,7 +3781,13 @@ impl ScratchBuilder {
         let mut first = None;
         let mut previous: Option<String> = None;
         for statement in statements {
-            if matches!(statement, Stmt::Function { .. } | Stmt::Class { .. }) {
+            if matches!(
+                statement,
+                Stmt::Function { .. }
+                    | Stmt::Class { .. }
+                    | Stmt::Namespace { .. }
+                    | Stmt::Use { .. }
+            ) {
                 continue;
             }
             if matches!(statement, Stmt::VarDecl { symbol: Some(symbol), object_fields, .. }
@@ -2122,6 +3847,7 @@ impl ScratchBuilder {
             .iter()
             .map(|argument| match argument.ty {
                 Type::Bool => "false",
+                Type::Text | Type::Any => "",
                 Type::Int | Type::Float | Type::Class(_) => "0",
             })
             .collect::<Vec<_>>();
@@ -2246,6 +3972,11 @@ impl ScratchBuilder {
                 }
                 Ok(id)
             }
+            Stmt::Call {
+                arguments,
+                builtin: Some(builtin),
+                ..
+            } => self.emit_builtin(builtin, arguments, parent),
             Stmt::Function { .. } | Stmt::Call { .. } => {
                 Err("internal error: unresolved function call".to_string())
             }
@@ -2280,6 +4011,14 @@ impl ScratchBuilder {
                                 1,
                             ),
                             ty: Some(Type::Bool),
+                        }
+                    } else if field.ty == Type::Text {
+                        Expr {
+                            kind: ExprKind::Text(
+                                field.initial_value.as_str().unwrap_or_default().to_string(),
+                            ),
+                            token: Token::new(TokenKind::String, field.source_name.clone(), 1, 1),
+                            ty: Some(Type::Text),
                         }
                     } else {
                         Expr {
@@ -2426,6 +4165,9 @@ impl ScratchBuilder {
         if let ExprKind::Number(value) = &expr.kind {
             return Ok(json!([1, [4, value]]));
         }
+        if let ExprKind::Text(value) = &expr.kind {
+            return Ok(json!([1, [10, value]]));
+        }
         let reporter = self.reporter(expr, parent)?;
         let shadow = match expr.ty {
             Some(Type::Int | Type::Float) => json!([4, 10]),
@@ -2438,6 +4180,9 @@ impl ScratchBuilder {
         match &expr.kind {
             ExprKind::Number(value) => self.boolean_literal(value != "0", parent),
             ExprKind::Boolean(value) => self.boolean_literal(*value, parent),
+            ExprKind::Text(_) => {
+                Err("text literals are Scratch shadow inputs, not reporters".to_string())
+            }
             ExprKind::Member {
                 symbol: Some(symbol),
                 ..
@@ -2573,6 +4318,19 @@ impl ScratchBuilder {
                     Ok(id)
                 }
             }
+            ExprKind::Call {
+                arguments,
+                builtin: Some(builtin),
+                ..
+            } => {
+                if builtin.result.is_none() {
+                    return Err(format!(
+                        "internal error: Scratch command {:?} used as a reporter",
+                        builtin.name
+                    ));
+                }
+                self.emit_builtin(builtin, arguments, parent)
+            }
             ExprKind::Call { .. } => {
                 Err("internal error: function call was not lowered".to_string())
             }
@@ -2622,6 +4380,7 @@ pub struct SymbolOccurrence {
     pub parameter: bool,
     pub function: bool,
     pub class_symbol: bool,
+    pub namespace_symbol: bool,
     pub line: u32,
     pub character: u32,
     pub length: u32,
@@ -2651,6 +4410,7 @@ fn symbol_occurrence(
         parameter: symbol.argument_id.is_some(),
         function: false,
         class_symbol: false,
+        namespace_symbol: false,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -2694,6 +4454,31 @@ fn class_symbol_occurrence(
     occurrence
 }
 
+fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> SymbolOccurrence {
+    let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
+    let character = line_text
+        .trim_end_matches('\r')
+        .chars()
+        .take(token.column - 1)
+        .map(char::len_utf16)
+        .sum::<usize>() as u32;
+    SymbolOccurrence {
+        symbol_id: format!("namespace:{path}"),
+        name: path.to_string(),
+        ty: "namespace".to_string(),
+        mutable: false,
+        parameter: false,
+        function: false,
+        class_symbol: false,
+        namespace_symbol: true,
+        line: (token.line - 1) as u32,
+        character,
+        length: token.text.encode_utf16().count() as u32,
+        declaration: true,
+        modification: false,
+    }
+}
+
 fn function_symbol_occurrence(
     source: &str,
     token: &Token,
@@ -2715,6 +4500,7 @@ fn function_symbol_occurrence(
         parameter: false,
         function: true,
         class_symbol: false,
+        namespace_symbol: false,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -2776,7 +4562,10 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
             collect_expression_symbols(source, left, output);
             collect_expression_symbols(source, right, output);
         }
-        ExprKind::Number(_) | ExprKind::Boolean(_) | ExprKind::Name { symbol: None, .. } => {}
+        ExprKind::Number(_)
+        | ExprKind::Boolean(_)
+        | ExprKind::Text(_)
+        | ExprKind::Name { symbol: None, .. } => {}
     }
 }
 
@@ -2787,6 +4576,16 @@ fn collect_statement_symbols(
 ) {
     for statement in statements {
         match statement {
+            Stmt::Use { .. } => {}
+            Stmt::Namespace {
+                name_token,
+                path,
+                body,
+                ..
+            } => {
+                output.push(namespace_symbol_occurrence(source, name_token, path));
+                collect_statement_symbols(source, body, output);
+            }
             Stmt::Class {
                 name_token,
                 name,
@@ -2940,6 +4739,20 @@ fn make_unary(operator: &str, operand: Expr, token: Token) -> Expr {
     }
 }
 
+fn emit_function_definitions(
+    builder: &mut ScratchBuilder,
+    statements: &[Stmt],
+) -> Result<(), String> {
+    for statement in statements {
+        match statement {
+            Stmt::Namespace { body, .. } => emit_function_definitions(builder, body)?,
+            Stmt::Function { .. } => builder.procedure_definition(statement)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn compile_source(source: &str) -> Result<(Value, Vec<(String, Vec<u8>)>, usize), String> {
     let tokens = lex(source)?;
     let mut statements = Parser::new(tokens).parse()?;
@@ -2949,11 +4762,7 @@ pub fn compile_source(source: &str) -> Result<(Value, Vec<(String, Vec<u8>)>, us
     let hat = builder.block("event_whenflagclicked", None, true, json!({}));
     let first = builder.sequence(&statements, &hat, None)?;
     builder.blocks.get_mut(&hat).unwrap()["next"] = json!(first);
-    for statement in &statements {
-        if matches!(statement, Stmt::Function { .. }) {
-            builder.procedure_definition(statement)?;
-        }
-    }
+    emit_function_definitions(&mut builder, &statements)?;
     let block_count = builder.blocks.len();
 
     let backdrop_svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"360\" viewBox=\"0 0 480 360\"><rect width=\"480\" height=\"360\" fill=\"#ffffff\"/></svg>";
@@ -2984,7 +4793,7 @@ pub fn compile_source(source: &str) -> Result<(Value, Vec<(String, Vec<u8>)>, us
         }
     }
     let stage = json!({
-        "isStage": true, "name": "Stage", "variables": stage_variables, "lists": {}, "broadcasts": {}, "blocks": {}, "comments": {},
+        "isStage": true, "name": "Stage", "variables": stage_variables, "lists": {}, "broadcasts": builder.broadcasts.clone(), "blocks": {}, "comments": {},
         "currentCostume": 0, "costumes": [backdrop_costume], "sounds": [], "volume": 100, "layerOrder": 0, "tempo": 60,
         "videoTransparency": 50, "videoState": "on", "textToSpeechLanguage": null
     });
@@ -3181,6 +4990,49 @@ mod tests {
             .collect();
         assert!(project_names.contains(&"value"));
         assert!(target_names.contains(&"value_2"));
+    }
+
+    #[test]
+    fn namespaces_imports_and_scratch_rotation_blocks_are_lowered() {
+        let (project, _) = source_project(
+            "use Scratch.Motion as motion\nuse Scratch.Motion.{move, rotate}\nns Gameplay { fn turn_and_move(steps: int) { move(steps)\nrotate(15)\nmotion.rotateCW(30)\nScratch.Motion.rotateCCW(45) } }\nGameplay.turn_and_move(10)",
+        );
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let opcodes: Vec<&str> = blocks
+            .values()
+            .map(|block| block["opcode"].as_str().unwrap())
+            .collect();
+        assert!(opcodes.contains(&"motion_movesteps"));
+        assert_eq!(
+            opcodes
+                .iter()
+                .filter(|opcode| **opcode == "motion_turnright")
+                .count(),
+            2
+        );
+        assert!(opcodes.contains(&"motion_turnleft"));
+        assert!(opcodes.contains(&"procedures_definition"));
+        assert!(opcodes.contains(&"procedures_call"));
+
+        let (aliased_project, _) =
+            source_project("use Scratch.Motion.rotateCW as clockwise\nclockwise(90)");
+        let aliased_blocks = aliased_project["targets"][1]["blocks"].as_object().unwrap();
+        assert!(
+            aliased_blocks
+                .values()
+                .any(|block| block["opcode"] == "motion_turnright")
+        );
+
+        let (group_alias_project, _) =
+            source_project("use Scratch.Motion as motion.{rotate}\nmotion.rotate(45)");
+        let group_alias_blocks = group_alias_project["targets"][1]["blocks"]
+            .as_object()
+            .unwrap();
+        assert!(
+            group_alias_blocks
+                .values()
+                .any(|block| block["opcode"] == "motion_turnright")
+        );
     }
 
     #[test]

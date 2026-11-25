@@ -1,0 +1,19 @@
+use Scratch.Motion as motion
+use Scratch.Motion.{move, rotate, rotateCW, rotateCCW}
+
+ns Gameplay {
+    fn turnAndMove(steps: int) {
+        move(steps)
+        motion.rotateCW(15)
+        rotate(5)
+        rotateCCW(10)
+    }
+}
+
+Gameplay.turnAndMove(10)
+Scratch.Looks.say("Hello from Rake!")
+Scratch.Control.wait(1)
+
+var current_x: float = Scratch.Motion.xPosition()
+var answer: text = Scratch.Operators.join("x = ", current_x)
+Scratch.Looks.say(answer)
