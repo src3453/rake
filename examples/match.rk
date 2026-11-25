@@ -1,0 +1,45 @@
+use Scratch.Events as Events
+
+enum GameState {
+    Title,
+    Playing,
+    Paused,
+    GameOver,
+}
+
+fn next_state(current: GameState) -> GameState {
+    return match current {
+        GameState.Title => GameState.Playing,
+        GameState.Playing => GameState.Paused,
+        GameState.Paused => GameState.GameOver,
+        GameState.GameOver => GameState.Title,
+    }
+}
+
+fn score(state: GameState) -> int {
+    return match state {
+        GameState.Playing => {
+            Scratch.Looks.say("The block arm runs before returning")
+            return 10
+        },
+        GameState.Paused => 5,
+        _ => 0,
+    }
+}
+
+fn show_state(state: GameState) {
+    match state {
+        GameState.Title => Scratch.Looks.say("Title"),
+        GameState.Playing => Scratch.Looks.say("Playing"),
+        GameState.Paused => Scratch.Looks.say("Paused"),
+        GameState.GameOver => Scratch.Looks.say("Game over"),
+    }
+}
+
+var state: GameState = GameState.Title
+
+event Events.greenFlag {
+    state = next_state(state)
+    show_state(state)
+    Scratch.Looks.say(score(state))
+}

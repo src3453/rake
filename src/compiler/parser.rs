@@ -88,6 +88,29 @@ enum ExprKind {
         variant_name: String,
         value: i64,
     },
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum MatchPattern {
+    Wildcard(Token),
+    Value(Expr),
+}
+
+#[derive(Clone, Debug)]
+enum MatchArmBody {
+    Expression(Expr),
+    Block(Vec<Stmt>),
+}
+
+#[derive(Clone, Debug)]
+struct MatchArm {
+    token: Token,
+    pattern: MatchPattern,
+    body: MatchArmBody,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +221,10 @@ enum Stmt {
         token: Token,
         condition: Expr,
         body: Vec<Stmt>,
+    },
+    Match {
+        scrutinee: Expr,
+        arms: Vec<MatchArm>,
     },
 }
 
@@ -935,6 +962,13 @@ impl Parser {
     }
 
     fn statement(&mut self) -> Result<Stmt, String> {
+        if self.at("match") {
+            let (_, scrutinee, arms) = self.match_expression_parts()?;
+            return Ok(Stmt::Match {
+                scrutinee,
+                arms,
+            });
+        }
         if self.at("send") {
             self.take();
             let message_token = self.expect_identifier()?;
@@ -1020,7 +1054,7 @@ impl Parser {
         }
         Err(diagnostic(
             self.current(),
-            "expected a variable declaration, assignment, function call, send, if, or while",
+            "expected a variable declaration, assignment, function call, send, if, while, or match",
         ))
     }
 
@@ -1119,6 +1153,47 @@ impl Parser {
         })
     }
 
+    fn match_expression_parts(&mut self) -> Result<(Token, Expr, Vec<MatchArm>), String> {
+        let token = self.expect("match")?;
+        let scrutinee = self.expression(1)?;
+        self.expect("{")?;
+        let mut arms = Vec::new();
+        self.semicolons();
+        while !self.at("}") {
+            if self.current().kind == TokenKind::Eof {
+                return Err(diagnostic(self.current(), "expected '}' before end of file"));
+            }
+            let arm_token = self.current().clone();
+            let pattern = if self.current().kind == TokenKind::Identifier && self.at("_") {
+                MatchPattern::Wildcard(self.take())
+            } else {
+                MatchPattern::Value(self.expression(1)?)
+            };
+            self.expect("=>")?;
+            let body = if self.at("{") {
+                MatchArmBody::Block(self.block()?)
+            } else {
+                MatchArmBody::Expression(self.expression(1)?)
+            };
+            arms.push(MatchArm {
+                token: arm_token,
+                pattern,
+                body,
+            });
+            if self.at(",") {
+                self.take();
+                self.semicolons();
+            } else if !self.at("}") {
+                return Err(diagnostic(self.current(), "expected ',' or '}' after match arm"));
+            }
+        }
+        self.take();
+        if arms.is_empty() {
+            return Err(diagnostic(&token, "match must contain at least one arm"));
+        }
+        Ok((token, scrutinee, arms))
+    }
+
     fn precedence(operator: &str) -> Option<u8> {
         match operator {
             "||" => Some(1),
@@ -1154,6 +1229,17 @@ impl Parser {
 
     fn prefix(&mut self) -> Result<Expr, String> {
         let token = self.current().clone();
+        if token.text == "match" {
+            let (token, scrutinee, arms) = self.match_expression_parts()?;
+            return Ok(Expr {
+                kind: ExprKind::Match {
+                    scrutinee: Box::new(scrutinee),
+                    arms,
+                },
+                token,
+                ty: None,
+            });
+        }
         if token.text == "!" || token.text == "-" {
             self.take();
             let operand = self.expression(7)?;

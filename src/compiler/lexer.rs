@@ -193,7 +193,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
         if let Some(pair) = pair.filter(|pair| {
             matches!(
                 pair.as_str(),
-                "==" | "!=" | "<=" | ">=" | "&&" | "||" | "+=" | "-=" | "->"
+                "==" | "!=" | "<=" | ">=" | "&&" | "||" | "+=" | "-=" | "->" | "=>"
             )
         }) {
             tokens.push(Token::new(

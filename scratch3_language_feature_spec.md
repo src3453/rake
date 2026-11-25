@@ -245,10 +245,9 @@ match state {
 }
 ```
 
-Scratch
-Backendではタグ値と条件分岐などにLoweringする。パターンの網羅性はコンパイル時に検査する。
+Scratch Backendではタグ値と条件分岐などにLoweringする。パターンの網羅性はコンパイル時に検査する。
 
-初期実装ではペイロードを持たないenumを対象とし、variantへ宣言順の0始まり整数タグを割り当てる。enum型とvariant参照はコンパイル時に解決し、実行時にはタグ値を通常のScratch数値変数へ格納する。enum同士の`==` / `!=`、変数代入、関数引数・戻り値、クラスフィールド初期値を扱う。異なるenum型間の比較や数値演算は型エラーとする。ペイロード付きvariant、`match`、網羅性検査は後続段階とする。
+初期実装ではペイロードを持たないenumを対象とし、variantへ宣言順の0始まり整数タグを割り当てる。enum型とvariant参照はコンパイル時に解決し、実行時にはタグ値を通常のScratch数値変数へ格納する。enum同士の`==` / `!=`、変数代入、関数引数・戻り値、クラスフィールド初期値を扱う。異なるenum型間の比較や数値演算は型エラーとする。`match` は enum variant と scalar literal (`int`、`float`、`bool`、`text`) をパターンにし、arm の値式を式の結果として扱う。enum は全variant、bool は `true` と `false` を列挙するか、最後に `_` を置く。式として使うブロック arm は現在の関数から `return` して終了する。match は判定値の一時変数と条件分岐へLoweringする。ペイロード付きvariantは後続段階とする。
 
 ### 4.6 関数・クロージャ
 

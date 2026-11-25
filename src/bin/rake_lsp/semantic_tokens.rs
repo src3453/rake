@@ -63,6 +63,7 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                         | "if"
                         | "else"
                         | "while"
+                        | "match"
                         | "return"
                         | "true"
                         | "false"
@@ -143,7 +144,7 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             SourceTokenKind::Symbol
                 if matches!(
                     token.text.as_str(),
-                    "=" | "->"
+                    "=" | "->" | "=>"
                         | "+="
                         | "-="
                         | "+"

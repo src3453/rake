@@ -397,6 +397,76 @@ mod tests {
     }
 
     #[test]
+    fn match_keyword_and_enum_patterns_have_editor_support() {
+        let completion = completion_at("mat", 3);
+        assert!(completion.iter().any(|item| item["label"] == "match"));
+
+        let pattern_completion_source =
+            "enum State { Ready, Done }\nfn score(state: State) -> int { return match state { State. } }";
+        let line_start = pattern_completion_source.find('\n').unwrap() + 1;
+        let pattern_position = pattern_completion_source.find("State. }").unwrap()
+            + "State.".len();
+        let pattern_completion = completion_items(
+            Some(&document(pattern_completion_source)),
+            &json!({"position": {"line": 1, "character": pattern_position - line_start}}),
+        );
+        assert!(pattern_completion.iter().any(|item| item["label"] == "Ready"));
+        assert!(pattern_completion.iter().any(|item| item["label"] == "Done"));
+
+        let text = "enum State { Ready, Done }\nfn score(state: State) -> int {\n    return match state {\n        State.Ready => 1,\n        State.Done => 2,\n    }\n}\n";
+        let tokens = source_tokens(text).unwrap();
+        let match_keyword = tokens.iter().find(|token| token.text == "match").unwrap();
+        let ready_pattern = tokens
+            .iter()
+            .find(|token| token.line == 3 && token.text == "Ready")
+            .unwrap();
+        assert_eq!(
+            semantic_type_at(text, match_keyword.line, match_keyword.start_character),
+            Some(2)
+        );
+        assert_eq!(
+            semantic_type_at(text, ready_pattern.line, ready_pattern.start_character),
+            Some(8)
+        );
+
+        let doc = document(text);
+        let definition = definition_result(
+            "file:///match.rk",
+            &doc,
+            Position {
+                line: ready_pattern.line,
+                character: ready_pattern.start_character,
+            },
+        );
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        let hover = hover_result(
+            &doc,
+            Position {
+                line: ready_pattern.line,
+                character: ready_pattern.start_character,
+            },
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("State::Ready = 0"));
+
+        let invalid_document = document(
+            "enum State { Ready, Done }\nfn score(state: State) -> int { return match state { State.Ready => 1, } }",
+        );
+        let mut output = Vec::new();
+        publish_diagnostics(&mut output, "file:///match.rk", &invalid_document).unwrap();
+        let message = read_message(&mut BufReader::new(output.as_slice()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(message["method"], "textDocument/publishDiagnostics");
+        assert!(message["params"]["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("match is not exhaustive"));
+    }
+
+    #[test]
     fn event_handlers_have_hover_and_document_symbols() {
         let text = "use Scratch.Events.greenFlag as start\nevent start {}";
         let document = document(text);

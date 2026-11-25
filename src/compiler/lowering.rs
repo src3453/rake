@@ -104,6 +104,19 @@ fn lower_statement_list(
                 body.extend(refresh.iter().cloned());
                 before = refresh;
             }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                let replacement = lower_match(
+                    scrutinee,
+                    arms,
+                    None,
+                    symbols,
+                    allocator,
+                )?;
+                lowered.extend(replacement);
+                continue;
+            }
         }
         lowered.extend(before);
         lowered.push(statement);
@@ -187,6 +200,24 @@ fn lower_expression(
             };
             expression.ty = Some(ty);
         }
+        ExprKind::Match { scrutinee, arms } => {
+            let ty = expression
+                .ty
+                .ok_or_else(|| "internal error: untyped match expression".to_string())?;
+            let result_symbol = allocator.result_symbol(symbols, ty);
+            let mut statements = lower_match(
+                scrutinee,
+                arms,
+                Some(result_symbol.clone()),
+                symbols,
+                allocator,
+            )?;
+            before.append(&mut statements);
+            expression.kind = ExprKind::Name {
+                value: result_symbol.source_name.clone(),
+                symbol: Some(result_symbol),
+            };
+        }
         ExprKind::Member { .. }
         | ExprKind::Number(_)
         | ExprKind::Boolean(_)
@@ -196,4 +227,78 @@ fn lower_expression(
         | ExprKind::Name { .. } => {}
     }
     Ok(())
+}
+
+fn lower_match(
+    scrutinee: &mut Expr,
+    arms: &mut [MatchArm],
+    result_symbol: Option<Symbol>,
+    symbols: &mut Vec<Symbol>,
+    allocator: &mut GeneratedSymbolAllocator,
+) -> Result<Vec<Stmt>, String> {
+    let mut statements = Vec::new();
+    lower_expression(scrutinee, &mut statements, symbols, allocator)?;
+
+    let match_symbol = allocator.result_symbol(
+        symbols,
+        scrutinee
+            .ty
+            .ok_or_else(|| "internal error: untyped match scrutinee".to_string())?,
+    );
+    statements.push(Stmt::Assign {
+        token: scrutinee.token.clone(),
+        name: match_symbol.source_name.clone(),
+        operator: "=".to_string(),
+        value: scrutinee.clone(),
+        symbol: Some(match_symbol.clone()),
+    });
+
+    let mut fallback = Vec::new();
+    for arm in arms.iter_mut().rev() {
+        let arm_statements = match &mut arm.body {
+            MatchArmBody::Expression(expression) => {
+                let mut arm_statements = Vec::new();
+                lower_expression(expression, &mut arm_statements, symbols, allocator)?;
+                if let Some(result_symbol) = &result_symbol {
+                    arm_statements.push(Stmt::Assign {
+                        token: expression.token.clone(),
+                        name: result_symbol.source_name.clone(),
+                        operator: "=".to_string(),
+                        value: expression.clone(),
+                        symbol: Some(result_symbol.clone()),
+                    });
+                }
+                arm_statements
+            }
+            MatchArmBody::Block(body) => {
+                lower_statement_list(body, symbols, allocator)?;
+                body.clone()
+            }
+        };
+        match &arm.pattern {
+            MatchPattern::Wildcard(_) => fallback = arm_statements,
+            MatchPattern::Value(pattern) => {
+                let condition = make_binary(
+                    "==",
+                    Expr {
+                        kind: ExprKind::Name {
+                            value: match_symbol.source_name.clone(),
+                            symbol: Some(match_symbol.clone()),
+                        },
+                        token: scrutinee.token.clone(),
+                        ty: Some(match_symbol.ty),
+                    },
+                    pattern.clone(),
+                    arm.token.clone(),
+                );
+                fallback = vec![Stmt::If {
+                    condition,
+                    then_body: arm_statements,
+                    else_body: fallback,
+                }];
+            }
+        }
+    }
+    statements.extend(fallback);
+    Ok(statements)
 }

@@ -181,5 +181,16 @@
       "}"
     ],
     "description": "Create a while loop"
+  },
+  "Match expression": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value} {",
+      "    ${2:State.First} => ${3:first_value},",
+      "    ${4:State.Second} => ${5:second_value},",
+      "    _ => ${6:default_value},",
+      "}"
+    ],
+    "description": "Match enum variants or scalar values and return one arm value"
   }
 }

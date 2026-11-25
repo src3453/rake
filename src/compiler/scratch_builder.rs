@@ -614,6 +614,9 @@ impl ScratchBuilder {
                 self.input(&id, "SUBSTACK", json!([2, body_first]));
                 Ok(id)
             }
+            Stmt::Match { .. } => {
+                Err("internal error: match statement was not lowered".to_string())
+            }
             _ => Err("internal error: unresolved variable binding".to_string()),
         }
     }
@@ -805,6 +808,9 @@ impl ScratchBuilder {
             }
             ExprKind::Call { .. } => {
                 Err("internal error: function call was not lowered".to_string())
+            }
+            ExprKind::Match { .. } => {
+                Err("internal error: match expression was not lowered".to_string())
             }
         }
     }

@@ -408,6 +408,20 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
             collect_expression_symbols(source, left, output);
             collect_expression_symbols(source, right, output);
         }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expression_symbols(source, scrutinee, output);
+            for arm in arms {
+                if let MatchPattern::Value(pattern) = &arm.pattern {
+                    collect_expression_symbols(source, pattern, output);
+                }
+                match &arm.body {
+                    MatchArmBody::Expression(expression) => {
+                        collect_expression_symbols(source, expression, output)
+                    }
+                    MatchArmBody::Block(body) => collect_statement_symbols(source, body, output),
+                }
+            }
+        }
         ExprKind::Number(_)
         | ExprKind::Boolean(_)
         | ExprKind::Text(_)
@@ -623,6 +637,24 @@ fn collect_statement_symbols(
             } => {
                 collect_expression_symbols(source, condition, output);
                 collect_statement_symbols(source, body, output);
+            }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_expression_symbols(source, scrutinee, output);
+                for arm in arms {
+                    if let MatchPattern::Value(pattern) = &arm.pattern {
+                        collect_expression_symbols(source, pattern, output);
+                    }
+                    match &arm.body {
+                        MatchArmBody::Expression(expression) => {
+                            collect_expression_symbols(source, expression, output)
+                        }
+                        MatchArmBody::Block(body) => {
+                            collect_statement_symbols(source, body, output)
+                        }
+                    }
+                }
             }
             _ => {}
         }

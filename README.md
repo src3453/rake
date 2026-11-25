@@ -9,6 +9,7 @@ Rust stableとCargoを使います。Rakeのソース拡張子は `.rk` です�
 ```sh
 cargo test
 cargo run --bin rake -- examples/basic.rk -o outputs/basic.sb3
+cargo run --bin rake -- examples/match.rk -o outputs/match.sb3
 cargo run --bin rake -- examples/scratch_lists.rk -o outputs/scratch_lists.sb3
 cargo run --bin rake -- examples/events.rk -o outputs/events.sb3
 cargo run --bin rake -- examples/macros.rk -o outputs/macros.sb3
@@ -44,7 +45,7 @@ while score < limit {
 }
 ```
 
-`int`、`float`、`bool`、`text`、`Scratch.Generics.Value`、変数、型注釈と型推論、算術・比較・論理演算、`if`、`while`を実装しています。`;` は任意です。`while` はScratchの「〜まで繰り返す」ブロックと条件反転へ変換します。
+`int`、`float`、`bool`、`text`、`Scratch.Generics.Value`、変数、型注釈と型推論、算術・比較・論理演算、`if`、`while`、`match`を実装しています。`;` は任意です。`while` はScratchの「〜まで繰り返す」ブロックと条件反転へ変換します。
 
 ## enum
 
@@ -63,8 +64,18 @@ if state == GameState.Playing {
 }
 ```
 
-enum 定数はクラスのフィールド初期値にも使えます。ペイロード付き variant と `match` はまだ未対応です。
-実行例は [examples/enums.rk](examples/enums.rk) を参照してください。
+enum 定数はクラスのフィールド初期値にも使えます。`match` は enum とスカラー値に使え、arm の値を式の結果として扱います。`_` を使わない enum と bool の match では全variant / 両方の値を網羅してください。ブロック arm は関数から `return` するときに使えます。ペイロード付き variant はまだ未対応です。
+
+```rake
+fn score(state: GameState) -> int {
+    return match state {
+        GameState.Title => 0,
+        GameState.Playing => 10,
+        _ => -1,
+    }
+}
+```
+enum の基本例は [examples/enums.rk](examples/enums.rk)、`match` の式 arm・ブロック arm・文としての利用例は [examples/match.rk](examples/match.rk) を参照してください。
 
 ## イベント
 

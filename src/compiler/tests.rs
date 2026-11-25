@@ -81,6 +81,84 @@ if state == State.Playing { Scratch.Looks.say("playing") }
     }
 
     #[test]
+    fn lowers_match_expressions_with_value_and_returning_block_arms() {
+        let source = r#"
+enum State { Ready, Playing }
+fn score(state: State) -> int {
+    return match state {
+        State.Ready => 0,
+        State.Playing => {
+            Scratch.Looks.say("playing")
+            return 10
+        },
+    }
+}
+fn choose(state: State) -> int {
+    match state {
+        State.Ready => { return 0 },
+        State.Playing => { return 10 },
+    }
+}
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let opcodes = blocks
+            .values()
+            .map(|block| block["opcode"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(opcodes.contains(&"control_if_else"));
+        assert!(opcodes.contains(&"operator_equals"));
+        assert!(opcodes.contains(&"procedures_definition"));
+        assert!(opcodes.contains(&"looks_say"));
+        assert!(opcodes.contains(&"data_setvariableto"));
+    }
+
+    #[test]
+    fn lowers_match_statements_and_scalar_patterns() {
+        let source = r#"
+fn show(value: bool) {
+    match value {
+        true => Scratch.Looks.say("yes"),
+        false => { Scratch.Looks.say("no") },
+    }
+}
+var numeric: int = match 5 { 4 => 0, 5 => 1, _ => -1 }
+var textual: text = match "yes" { "yes" => "matched", _ => "other" }
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        assert!(blocks.values().any(|block| block["opcode"] == "control_if_else"));
+        assert_eq!(
+            blocks
+                .values()
+                .filter(|block| block["opcode"] == "looks_say")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn reports_match_type_exhaustiveness_and_block_errors() {
+        for (source, expected) in [
+            (
+                "enum State { Ready, Done } fn f(state: State) -> int { return match state { State.Ready => 1, } }",
+                "match is not exhaustive",
+            ),
+            (
+                "enum State { Ready, Done } var state: State = State.Ready var value: int = match state { State.Ready => 1, State.Done => \"done\", }",
+                "match arm type text does not match previous arm type int",
+            ),
+            (
+                "enum State { Ready, Done } fn f(state: State) -> int { return match state { State.Ready => { Scratch.Looks.say(\"ready\") }, _ => 0, } }",
+                "must end by returning",
+            ),
+        ] {
+            let error = compile_source(source).unwrap_err();
+            assert!(error.contains(expected), "expected {expected:?} in {error:?}");
+        }
+    }
+
+    #[test]
     fn enum_tags_initialize_class_fields_and_namespaced_imports() {
         let source = r#"
 ns Game { enum State { Ready, Done } }
@@ -311,6 +389,11 @@ event Events.cloneStart {}
     #[test]
     fn compiles_the_documented_event_example() {
         source_project(include_str!("../../examples/events.rk"));
+    }
+
+    #[test]
+    fn compiles_the_match_example() {
+        source_project(include_str!("../../examples/match.rk"));
     }
 
     #[test]

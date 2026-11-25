@@ -362,6 +362,7 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("if", 14, "Conditional statement"),
             ("else", 14, "Alternative branch"),
             ("while", 14, "Loop statement"),
+            ("match", 14, "Match an enum or scalar value"),
             ("fn", 14, "Function declaration"),
             (
                 "warp",

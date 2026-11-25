@@ -104,6 +104,13 @@ impl TypeChecker {
                         collect(else_body, names);
                     }
                     Stmt::While { body, .. } => collect(body, names),
+                    Stmt::Match { arms, .. } => {
+                        for arm in arms {
+                            if let MatchArmBody::Block(body) = &arm.body {
+                                collect(body, names);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

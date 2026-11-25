@@ -75,7 +75,7 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|class|enum|public|private|fn|warp|event|send|if|else|while|return|self)\\b"
+          "match": "\\b(var|const|class|enum|public|private|fn|warp|event|send|if|else|while|match|return|self)\\b"
         }
       ]
     },
@@ -111,7 +111,7 @@
       "patterns": [
         {
           "name": "keyword.operator.rake",
-          "match": "->|==|!=|<=|>=|&&|\\|\\||\\+=|-=|[+*/<>=!-]"
+          "match": "=>|->|==|!=|<=|>=|&&|\\|\\||\\+=|-=|[+*/<>=!-]"
         }
       ]
     },

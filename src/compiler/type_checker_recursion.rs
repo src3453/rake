@@ -10,6 +10,13 @@ fn statements_return_on_all_paths(statements: &[Stmt]) -> bool {
                 && statements_return_on_all_paths(then_body)
                 && statements_return_on_all_paths(else_body)
         }
+        Stmt::Match { arms, .. } => {
+            !arms.is_empty()
+                && arms.iter().all(|arm| match &arm.body {
+                    MatchArmBody::Block(body) => statements_return_on_all_paths(body),
+                    MatchArmBody::Expression(_) => false,
+                })
+        }
         _ => false,
     })
 }
@@ -29,6 +36,20 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
         ExprKind::Binary { left, right, .. } => {
             collect_expression_calls(left, calls);
             collect_expression_calls(right, calls);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_expression_calls(scrutinee, calls);
+            for arm in arms {
+                if let MatchPattern::Value(pattern) = &arm.pattern {
+                    collect_expression_calls(pattern, calls);
+                }
+                match &arm.body {
+                    MatchArmBody::Expression(expression) => {
+                        collect_expression_calls(expression, calls)
+                    }
+                    MatchArmBody::Block(body) => collect_statement_calls(body, calls),
+                }
+            }
         }
         ExprKind::Number(_)
         | ExprKind::Boolean(_)
@@ -75,6 +96,22 @@ fn collect_statement_calls(statements: &[Stmt], calls: &mut Vec<String>) {
             } => {
                 collect_expression_calls(condition, calls);
                 collect_statement_calls(body, calls);
+            }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_expression_calls(scrutinee, calls);
+                for arm in arms {
+                    if let MatchPattern::Value(pattern) = &arm.pattern {
+                        collect_expression_calls(pattern, calls);
+                    }
+                    match &arm.body {
+                        MatchArmBody::Expression(expression) => {
+                            collect_expression_calls(expression, calls)
+                        }
+                        MatchArmBody::Block(body) => collect_statement_calls(body, calls),
+                    }
+                }
             }
         }
     }

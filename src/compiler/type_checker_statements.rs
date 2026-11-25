@@ -779,6 +779,12 @@ impl TypeChecker {
                 }
                 self.check_statements(body, true)
             }
+            Stmt::Match {
+                scrutinee, arms, ..
+            } => {
+                self.check_match(scrutinee, arms, false)?;
+                Ok(())
+            }
         }
     }
 }

@@ -1,4 +1,235 @@
 impl TypeChecker {
+    fn match_constant_key(expression: &Expr) -> Option<String> {
+        match &expression.kind {
+            ExprKind::Number(value) => {
+                let number = value.parse::<f64>().ok()?;
+                Some(format!("number:{:016x}", if number == 0.0 { 0 } else { number.to_bits() }))
+            }
+            ExprKind::Boolean(value) => Some(format!("bool:{value}")),
+            ExprKind::Text(value) => Some(format!("text:{value:?}")),
+            ExprKind::EnumValue {
+                enum_id, value, ..
+            } => Some(format!("enum:{enum_id}:{value}")),
+            ExprKind::Unary { operator, operand } if operator == "-" => {
+                let ExprKind::Number(value) = &operand.kind else {
+                    return None;
+                };
+                let number = -value.parse::<f64>().ok()?;
+                Some(format!("number:{:016x}", if number == 0.0 { 0 } else { number.to_bits() }))
+            }
+            _ => None,
+        }
+    }
+
+    fn match_statements_diverge(statements: &[Stmt]) -> bool {
+        statements.iter().any(|statement| match statement {
+            Stmt::Return { .. } => true,
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                !else_body.is_empty()
+                    && Self::match_statements_diverge(then_body)
+                    && Self::match_statements_diverge(else_body)
+            }
+            Stmt::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms.iter().all(|arm| match &arm.body {
+                        MatchArmBody::Block(body) => Self::match_statements_diverge(body),
+                        MatchArmBody::Expression(_) => false,
+                    })
+            }
+            _ => false,
+        })
+    }
+
+    fn merge_match_types(current: Type, next: Type) -> Option<Type> {
+        if current == next {
+            Some(current)
+        } else if current.numeric() && next.numeric() {
+            Some(Type::Float)
+        } else if current == Type::Any {
+            Some(next)
+        } else if next == Type::Any {
+            Some(current)
+        } else if current == Type::ScratchValue
+            && matches!(next, Type::Int | Type::Float | Type::Bool | Type::Text)
+        {
+            Some(Type::ScratchValue)
+        } else if next == Type::ScratchValue
+            && matches!(current, Type::Int | Type::Float | Type::Bool | Type::Text)
+        {
+            Some(Type::ScratchValue)
+        } else {
+            None
+        }
+    }
+
+    fn check_match(
+        &mut self,
+        scrutinee: &mut Expr,
+        arms: &mut [MatchArm],
+        expression_context: bool,
+    ) -> Result<Type, String> {
+        if arms.is_empty() {
+            return Err(diagnostic(&scrutinee.token, "match must contain at least one arm"));
+        }
+        let scrutinee_type = self.check_expr(scrutinee)?;
+        if matches!(scrutinee_type, Type::Class(_) | Type::ScratchList) {
+            return Err(diagnostic(
+                &scrutinee.token,
+                "match requires an enum or scalar value",
+            ));
+        }
+
+        let mut wildcard_index = None;
+        let mut pattern_keys = std::collections::HashSet::new();
+        let mut enum_values = std::collections::HashSet::new();
+        let mut bool_values = std::collections::HashSet::new();
+        let mut result_type = None;
+
+        for (index, arm) in arms.iter_mut().enumerate() {
+            match &mut arm.pattern {
+                MatchPattern::Wildcard(token) => {
+                    if wildcard_index.replace(index).is_some() {
+                        return Err(diagnostic(token, "a match can contain only one wildcard arm"));
+                    }
+                }
+                MatchPattern::Value(pattern) => {
+                    if wildcard_index.is_some() {
+                        return Err(diagnostic(
+                            &arm.token,
+                            "wildcard match arm must be the last arm",
+                        ));
+                    }
+                    let pattern_type = self.check_expr(pattern)?;
+                    let compatible = pattern_type == scrutinee_type
+                        || (scrutinee_type.numeric() && pattern_type.numeric())
+                        || (scrutinee_type == Type::ScratchValue
+                            && matches!(pattern_type, Type::Int | Type::Float | Type::Bool | Type::Text))
+                        || scrutinee_type == Type::Any;
+                    if !compatible {
+                        return Err(diagnostic(
+                            &pattern.token,
+                            format!(
+                                "match pattern has type {}, but the matched value has type {}",
+                                self.readable_type_name(pattern_type),
+                                self.readable_type_name(scrutinee_type)
+                            ),
+                        ));
+                    }
+                    let Some(key) = Self::match_constant_key(pattern) else {
+                        return Err(diagnostic(
+                            &pattern.token,
+                            "match patterns must be literals or enum variants",
+                        ));
+                    };
+                    if !pattern_keys.insert(key) {
+                        return Err(diagnostic(&pattern.token, "duplicate match pattern"));
+                    }
+                    match (&pattern.kind, scrutinee_type) {
+                        (ExprKind::EnumValue { enum_id, value, .. }, Type::Enum(_)) => {
+                            enum_values.insert((*enum_id, *value));
+                        }
+                        (ExprKind::Boolean(value), Type::Bool) => {
+                            bool_values.insert(*value);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            match &mut arm.body {
+                MatchArmBody::Expression(expression) if expression_context => {
+                    let arm_type = self.check_expr(expression)?;
+                    if matches!(arm_type, Type::Class(_) | Type::ScratchList) {
+                        return Err(diagnostic(
+                            &expression.token,
+                            "match arms must produce scalar or enum values",
+                        ));
+                    }
+                    result_type = Some(match result_type {
+                        None => arm_type,
+                        Some(current) => Self::merge_match_types(current, arm_type).ok_or_else(|| {
+                            diagnostic(
+                                &expression.token,
+                                format!(
+                                    "match arm type {} does not match previous arm type {}",
+                                    self.readable_type_name(arm_type),
+                                    self.readable_type_name(current)
+                                ),
+                            )
+                        })?,
+                    });
+                }
+                MatchArmBody::Expression(expression) => {
+                    if let ExprKind::Call {
+                        name,
+                        receiver,
+                        arguments,
+                        ..
+                    } = &expression.kind
+                    {
+                        let statement = Stmt::Call {
+                            token: expression.token.clone(),
+                            name: name.clone(),
+                            receiver: receiver.clone(),
+                            arguments: arguments.clone(),
+                            info: None,
+                            builtin: None,
+                        };
+                        let mut statements = vec![statement];
+                        self.check_statements(&mut statements, true)?;
+                        arm.body = MatchArmBody::Block(statements);
+                    } else {
+                        self.check_expr(expression)?;
+                    }
+                }
+                MatchArmBody::Block(body) => {
+                    self.check_statements(body, true)?;
+                    if expression_context {
+                        if !Self::match_statements_diverge(body) {
+                            return Err(diagnostic(
+                                &arm.token,
+                                "a match block arm used as a value must end by returning from its function",
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if wildcard_index.is_none() {
+            let exhaustive = match scrutinee_type {
+                Type::Enum(enum_id) => self
+                    .enums
+                    .values()
+                    .find(|enumeration| enumeration.id == enum_id)
+                    .is_some_and(|enumeration| {
+                        enumeration
+                            .variants
+                            .values()
+                            .all(|variant| enum_values.contains(&(enum_id, variant.value)))
+                    }),
+                Type::Bool => bool_values.contains(&true) && bool_values.contains(&false),
+                _ => false,
+            };
+            if !exhaustive {
+                return Err(diagnostic(
+                    &scrutinee.token,
+                    "match is not exhaustive; add a wildcard arm `_ => ...`",
+                ));
+            }
+        }
+
+        Ok(if expression_context {
+            result_type.unwrap_or(Type::Any)
+        } else {
+            Type::Any
+        })
+    }
+
     fn check_method_arguments(
         &mut self,
         arguments: &mut [Expr],
@@ -535,6 +766,12 @@ impl TypeChecker {
                         ));
                     }
                 }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                return self.check_match(scrutinee, arms, true).map(|ty| {
+                    expression.ty = Some(ty);
+                    ty
+                });
             }
         };
         expression.ty = Some(ty);
