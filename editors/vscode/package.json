@@ -1,7 +1,7 @@
 {
   "name": "rake-language",
   "displayName": "Rake Language Support",
-  "description": "Syntax highlighting, diagnostics, and completion for the Rake language.",
+  "description": "Rake language tools and a live Scratch blocks preview.",
   "version": "0.1.0",
   "publisher": "rake-language",
   "license": "MIT",
@@ -13,7 +13,8 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:rake"
+    "onLanguage:rake",
+    "onCommand:rake.openScratchPreview"
   ],
   "contributes": {
     "languages": [
@@ -37,6 +38,23 @@
         "path": "./snippets/rake.json"
       }
     ],
+    "commands": [
+      {
+        "command": "rake.openScratchPreview",
+        "title": "Rake: Open Scratch Blocks Preview",
+        "category": "Rake",
+        "icon": "./media/scratch-preview.svg"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceLangId == rake",
+          "command": "rake.openScratchPreview",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Rake",
       "properties": {

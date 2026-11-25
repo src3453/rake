@@ -9,6 +9,30 @@
     "body": "const ${1:name}: ${2:int} = ${3:0}",
     "description": "Declare a constant"
   },
+  "Function declaration": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:amount}: ${3:int}) {",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a function with a typed parameter"
+  },
+  "Class declaration": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "    var ${2:value}: ${3:int} = ${4:0}",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a class with fields"
+  },
+  "Function call": {
+    "prefix": "call",
+    "body": "${1:functionName}(${2:argument})",
+    "description": "Call a function"
+  },
   "If statement": {
     "prefix": "if",
     "body": [

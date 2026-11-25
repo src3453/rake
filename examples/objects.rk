@@ -1,0 +1,19 @@
+class Vector2 {
+    var x: float = 0.0
+    var y: float = 0.0
+    const unit: float = 1.0
+}
+
+var player_position = Vector2()
+var enemy_position = Vector2()
+
+player_position.x = 12.0
+player_position.y = 4.0
+enemy_position.x = -8.0
+enemy_position.y = 6.0
+
+var player_is_to_the_right = player_position.x > enemy_position.x
+
+if player_is_to_the_right {
+    player_position.x += player_position.unit
+}

@@ -2,6 +2,7 @@
   "scopeName": "source.rake",
   "patterns": [
     {"include": "#comments"},
+    {"include": "#functions"},
     {"include": "#keywords"},
     {"include": "#types"},
     {"include": "#booleans"},
@@ -10,6 +11,11 @@
     {"include": "#punctuation"}
   ],
   "repository": {
+    "functions": {
+      "patterns": [
+        {"name": "entity.name.function.rake", "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"}
+      ]
+    },
     "comments": {
       "patterns": [
         {"name": "comment.line.double-slash.rake", "match": "//.*$"}
@@ -19,7 +25,7 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|if|else|while)\\b"
+          "match": "\\b(var|const|class|fn|if|else|while|return)\\b"
         }
       ]
     },
@@ -42,14 +48,14 @@
       "patterns": [
         {
           "name": "keyword.operator.rake",
-          "match": "==|!=|<=|>=|&&|\\|\\||\\+=|-=|[+*/<>=!-]"
+          "match": "->|==|!=|<=|>=|&&|\\|\\||\\+=|-=|[+*/<>=!-]"
         }
       ]
     },
     "punctuation": {
       "patterns": [
         {"name": "punctuation.section.block.begin.rake", "match": "[{}()]"},
-        {"name": "punctuation.separator.rake", "match": "[:,;]"}
+        {"name": "punctuation.separator.rake", "match": "[.:,;]"}
       ]
     }
   }

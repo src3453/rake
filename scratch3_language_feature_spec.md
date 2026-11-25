@@ -114,7 +114,7 @@ Go/Rust風のブレース構文を基本候補とする。
 
 ``` rust
 const fn main() {
-    const score: int = 0
+    const SCORE: int = 0
     var lives: int = 3
 
     if lives > 0 {
@@ -137,7 +137,17 @@ const fn main() {
 -   `match`
 -   `event`
 -   `self`
+-   `async fn` / `spawn`: 協調実行タスク
+-   `command fn` / `send`: アクター間の非同期メッセージ
+-   `await`: Channel 等の非同期結果を待つ
 -   `warp`: Scratchのカスタムブロックのwarp実行を明示する
+
+命名規約は推奨スタイルとして次を採用する。コンパイラーは規約違反だけを理由にエラーにせず、必要に応じてFormatterやLintで案内する。
+
+-   関数・メソッド: `camelCase` (`takeDamage`)
+-   変数・フィールド: `snake_case` (`player_score`)
+-   定数 (`const`): `UPPER_SNAKE_CASE` (`MAX_SCORE`)
+-   クラス: `UpperCamelCase` (`PlayerController`)
 
 セミコロンの扱い、式指向にするか文指向にするか、インデント規則などは要検討。
 
@@ -161,6 +171,7 @@ const fn main() {
 -   `enum`
 -   クラス型
 -   関数型
+-   `Task<T>` / `Channel<T>`
 
 Scratchの数値表現・文字列表現との違いを吸収するため、型の表現と変換規則を明確に定義する。
 
@@ -204,7 +215,7 @@ struct Vec2 {
 }
 
 impl Vec2 {
-    fn length_squared() -> float {
+    fn lengthSquared() -> float {
         self.x * self.x + self.y * self.y
     }
 }
@@ -271,7 +282,7 @@ import scratch.input
 例：
 
 ``` rust
-const player = Player()
+const PLAYER = Player()
 player.x += 10
 ```
 
@@ -284,6 +295,8 @@ player_hp
 ```
 
 フィールドアクセスはScratchの変数アクセス・代入・変更ブロックへ直接変換する。
+
+初期実装では、モジュール直下の `var player = Player()` のようにコンパイル時に特定できるインスタンスを対象とする。クラス本体は `int` / `float` / `bool` の `var` / `const` フィールドを持ち、初期値は数値または真偽値リテラルとする。インスタンス変数そのものはScratchに作らず、フィールドごとに一意なStage共有変数を割り当てる。実行時生成とメソッドはこの段階では対象外とする。
 
 ### 5.2 動的インスタンス
 
@@ -319,6 +332,8 @@ GCは初期必須機能としない。削除・再利用・参照の有効性を
 
 Scratch変数へ単純に展開すると、複数イベントやクローンでローカル変数が衝突する可能性がある。
 
+現在の初期割り当てでは、モジュール直下の束縛をStage共有変数、関数内または制御ブロック内の束縛を実行先ターゲットの変数、関数引数をScratchカスタムブロック引数として表す。Scratchのターゲット変数は呼び出しごとのフレームではないため、複数スクリプト間のローカル状態分離とyieldをまたぐ状態は別途Loweringする。
+
 そのため、次を設計する。
 
 -   スプライトごとの変数と全体変数の使い分け
@@ -329,16 +344,66 @@ Scratch変数へ単純に展開すると、複数イベントやクローンで�
 
 Scratchの変数スコープとクローン時の変数複製動作を踏まえて仕様化する。
 
+### 5.5 Sprite / Target 参照と呼び出し
+
+Stage と各 Sprite を独立したアクターとする。`.rks` で `.rk` ソースをターゲットに割り当てると、そのスクリプトの `self` は割り当て先アクターを表す。アクターは自分のターゲット状態を所有し、Stage と Sprite では利用できるプロパティ・メソッドが異なるため型検査で区別する。
+
+Scene 内で宣言した Sprite は、`sprites.<名前>` による静的アクター参照として使う。参照先はコンパイル時に解決し、名前が存在しなければエラーにする。初期版では動的に選ぶ Sprite や Clone 個体への参照は扱わない。
+
+Sprite スクリプトでは `self` の座標・向き・大きさを読み書きできる。移動・方向指定・表示などの操作は `self` のメソッドとして書き、Scratch 標準ブロックへ直接変換する。同じアクター内の通常メソッド呼び出しは同期呼び出しとする。
+
+``` rust
+self.x = 100
+self.y = 20
+self.direction = 45
+self.size = 100
+self.goTo(100, 20)
+self.move(10)
+self.turn(15)
+self.pointTowards(sprites.Enemy)
+self.show()
+```
+
+ここで `direction` は Scratch の向き（角度）を表す。見た目の回転方式は別設定とする。`self` が Stage の場合、座標・向き・大きさ・移動メソッドは型エラーにする。
+
+別 Sprite の参照は初期版では読み取り専用とし、`x`、`y`、`direction`、`size` などの公開属性を読めるようにする。各読み取りはそのブロックが評価された時点の値を返し、複数フィールドを一括取得する整合スナップショットは保証しない。接触判定、距離、別 Sprite の方向を向く操作も Sprite 参照を引数に取る。
+
+``` rust
+if sprites.Enemy.x > self.x {
+    self.pointTowards(sprites.Enemy)
+}
+
+if self.isTouching(sprites.Enemy) {
+    self.goTo(0, 0)
+}
+```
+
+別 Sprite の属性への代入 (`sprites.Enemy.x = 0`) は許可しない。別 Sprite に処理を依頼する場合は、受信側が公開した `command` に非同期メッセージを送る。
+
+``` rust
+command fn takeDamage(amount: int) {
+    self.hp -= amount
+}
+
+send sprites.Enemy.takeDamage(10)
+```
+
+`send` は受信側アクターのメールボックスへ型付きメッセージを送り、呼び出し元は完了を待たずに続行する。`command` は戻り値を持たず、呼び出し元から受信側のローカル状態を直接変更できない。応答が必要な場合は Channel 等を使った要求・応答として定義する。
+
 ## 6. 並行実行・スレッド管理
 
 Scratchのイベントスクリプト、クローン、協調実行モデルを言語側から扱えるようにする。
 
 ### 6.1 実行モデル
 
+-   Stage と各 Sprite をアクターとし、各ターゲットに割り当てたイベント・関数をそのアクターの協調実行タスクとする。
+-   ターゲット状態は所有アクター内で変更する。他アクターへの操作は `send` によるメッセージ送信を基本とする。
+-   アクターのメールボックスは到着した順にメッセージを受け付ける。各ハンドラーは独立タスクとして実行され、完了順はyieldや待機の位置によって変わりうる。
 -   Scratchのスクリプトは協調的に実行される。
 -   `yield()`、待機、イベント待ちなどを実行権の譲渡ポイントとして扱う。
 -   通常のOSスレッドやプリエンプティブな並行実行を前提としない。
 -   コンパイラはyieldをまたぐ変数の生存期間を考慮する。
+-   共有可変状態よりも、アクター内状態とChannelによるメッセージ通信を優先する。Mutexは共有状態が必要な場合に使う。
 
 イベント構文の候補：
 
@@ -370,19 +435,19 @@ Mutex:
 API候補：
 
 ``` rust
-const mutex = Mutex()
+const MUTEX = Mutex()
 
-fn update_shared_state() {
-    mutex.lock()
+fn updateSharedState() {
+    MUTEX.lock()
     // 共有状態の更新
-    mutex.unlock()
+    MUTEX.unlock()
 }
 ```
 
 設計上の必須事項：
 
 -   ロックの確認と取得の間にyieldを挟まない。
--   `try_lock()`は短い非yield区間で実行する。
+-   `tryLock()`は短い非yield区間で実行する。
 -   ロック取得に失敗したスレッドは、busy-waitで実行権を占有せずyieldする。
 -   所有者IDを保持し、別スレッドによるunlockを検出する。
 -   二重unlockや不正なunlockを検出する。
@@ -391,98 +456,104 @@ fn update_shared_state() {
 
 MutexはScratchの協調実行における共有状態保護機構であり、一般的なOSスレッド向けMutexと同一の意味を持つとは限らない。
 
-### 6.3 その他の並行処理プリミティブ
+### 6.3 タスクとChannel
 
-将来の候補：
+`async fn` とイベントハンドラーは協調実行タスクとして動作する。`spawn` は新しいタスクをスケジューラーへ登録し、`await` は現在のタスクを一時停止して結果を待つ。待機中に他のタスクやアクターは実行を続ける。
+
+`Channel<T>` をタスク間通信の基本プリミティブとする。Channel は型付き値を運ぶキューであり、受信側は値が届くまで yield する。容量、close、複数Channelを待つ `select` の仕様は別途定める。アクターへの `send` はアクターのメールボックスにコマンドを配送し、Channel の送受信とは区別する。
+
+共有可変状態を直接操作する設計を避け、アクターのメールボックスと Channel によるメッセージ通信を優先する。その他の並行処理プリミティブは将来候補とする。
 
   機能           目的
   -------------- --------------------------
   `Atomic<T>`    単純な共有値の操作
   `Semaphore`    同時実行数の制限
-  `Channel<T>`   タスク間のメッセージ通信
   `WaitGroup`    複数タスクの完了待ち
-
-共有データを直接変更する方式だけでなく、Channelによるメッセージ通信も重視する。
 
 ## 7. シーン定義DSL
 
-プログラム本体とは別に、シーン、スプライト、初期配置、アセット、Prefabなどを宣言的に記述するデータ定義言語を提供する。
+通常の Scene 用 `.rks` は Scratch プロジェクト内の1シーンを宣言的に記述し、1ファイルに1つのシーンを定義する。`.rks` はプロジェクト全体のビルド設定や任意の実行コードを含めない。プロジェクトルートの `main.rks` は初期 Scene を定義し、Scene 間の遷移を記述する特別な入力とする。
 
-Rust風のDSLを第一候補とするが、実行可能な任意コードではなく、宣言と制約された初期化式を中心とする。
+シーンには Scratch の Stage と Sprite を含める。Stage は背景だけでなくスクリプトの割り当て先にもなる。スクリプト本体は `.rk` に書き、`.rks` ではどの Scratch ターゲットに割り当てるかを宣言する。
 
-### 7.1 ファイル構成案
+Rake のコンパイラーとは別の crate として Cargo のようなビルドシステムを作る予定である。ビルドシステムがパッケージ設定と入力ファイルを解決し、コンパイラー crate が `.rk` と `.rks` を Scratch プロジェクトへ変換する。ビルドマニフェストの形式や成果物の配置はビルドシステム側の仕様で定める。
+
+`.rks` は Rust 風の宣言型 DSL とし、スクリプトコードを埋め込まず、シーン構成と `.rk` ソースへの参照を記述する。
+
+### 7.1 ファイル構成
 
 ``` text
 project/
-├── project.spr
+├── <build-system manifest>
+├── main.rks              # optional scene-transition entry
 ├── src/
-│   ├── main.src
-│   ├── player.src
-│   └── enemy.src
+│   ├── stage.rk
+│   └── player.rk
 ├── scenes/
-│   ├── title.scene
-│   └── game.scene
-├── prefabs/
-│   └── enemy.prefab
+│   ├── title.rks
+│   └── game.rks
 └── assets/
     ├── player.png
-    ├── enemy.png
     └── bg.png
 ```
 
-拡張子は仮案であり、最終決定ではない。
+各 Scene 用 `.rks` は単一の Scene を定義する。ビルドマニフェストは別 crate が所有する別ファイルであり、`.rks` をパッケージマニフェストとして扱わない。
 
 ### 7.2 シーン定義
 
 ``` rust
 scene Game {
-    background: "bg.png"
-
-    sprite Player {
-        source: "player.png"
-        position: (0, 0)
-        scale: (1.0, 1.0)
-        layer: 10
-        script: PlayerController
+    stage {
+        backdrop: "../assets/bg.png"
+        scripts: ["../src/stage.rk"]
     }
 
-    sprite Enemy {
-        source: "enemy.png"
-        position: (100, 50)
-        layer: 5
-        instances: 5
-        script: EnemyController
+    sprite Player {
+        costume: "../assets/player.png"
+        position: (0, 0)
+        size: 100
+        direction: 90
+        visible: true
+        layer: 10
+        scripts: ["../src/player.rk"]
     }
 }
 ```
 
-想定する情報：
+この構文例は仕様案であり、正式なトークン文法は別途定義する。アセット、`.rk` ソース、Scene 参照の相対パスは、その参照を記述した `.rks` ファイルのあるディレクトリを基準に解決する案とする。
+
+Scene は Scratch の Stage ターゲットを1つ持ち、0個以上の Sprite ターゲットを持つ。`stage` と `sprite` の `scripts` は `.rk` ソースのリストであり、そこに書かれたスクリプトをそれぞれ対応する Scratch ターゲットに生成する。Stage は Scratch と同じく座標・大きさ・向きを持たない。1つの `sprite` 宣言は1つの Scratch Sprite 定義を表し、Clone の初期生成数を表すものではない。
+
+初期版で扱う情報：
 
 -   背景
--   スプライト定義
--   コスチューム・アセット参照
--   初期座標・大きさ・向き
--   レイヤー・表示順序
--   初期変数
--   スクリプト・クラスとの関連付け
--   初期インスタンス数
--   衝突グループ
--   シーン遷移情報
+-   Sprite 定義とコスチューム・アセット参照
+-   Sprite の初期座標・大きさ・向き・表示状態
+-   Stage と Sprite それぞれへの `.rk` スクリプト割り当て
+-   Sprite のレイヤー・表示順序
 
-### 7.3 シーンとプログラムの静的検査
+複数のコスチュームや背景、初期変数、Prefab、Clone、衝突グループは後続仕様で定める。
+
+### 7.3 シーン遷移とビルド出力
+
+プロジェクトルートの `main.rks` は、通常の Scene 用 `.rks` と同じく初期 Scene を1つ定義し、さらに専用の `transition` 宣言で Scene 間の遷移を記述する。ビルドシステムは初期 Scene と遷移先 Scene をまとめて1つの `.sb3` にする。`main.rks` がない場合は、各 Scene 用 `.rks` をそれぞれ独立した `.sb3` にする。
+
+`transition` はシーン遷移専用の宣言であり、遷移先 Scene を明示する。文法の骨格は `transition <from-scene> -> <to-scene> ...` とする。遷移条件の記法と発火タイミングは `.rk` のイベント機能と合わせて定義する。遷移元・遷移先の Scene 名は、プロジェクト内の Scene 用 `.rks` で解決できなければならない。
+
+### 7.4 シーンとプログラムの静的検査
 
 コンパイラは次を検査する。
 
--   参照されたクラス・スクリプトが存在すること
--   参照されたアセットが存在すること
--   初期値が対象フィールドの型と整合すること
--   指定されたPrefabが存在すること
--   スプライトやシーンの識別子が一意であること
--   設定された値がScratch側の制約に適合すること
+-   Scene 用 `.rks` にシーン宣言がちょうど1つあること
+-   Sprite 名がシーン内で一意であること
+-   `main.rks` がある場合、初期 Scene が定義され、全 `transition` の遷移元・遷移先が解決できること
+-   参照された `.rk` ソースとアセットが存在すること
+-   値の型と範囲が対応する Scratch ターゲットの制約に適合すること
+-   `.rk` ソースのスクリプトを割り当て先の Stage または Sprite に生成できること
 
-### 7.4 Scene / Sprite / Prefab / Instance
+### 7.5 Scene / Sprite / Prefab / Instance
 
-次の概念を分離する。
+次の概念を分離する。Scene は Stage と Sprite の配置・初期状態を束ねる単位であり、Stage と各 Sprite はスクリプトを持てる Scratch ターゲットに対応する。
 
   概念          役割
   ------------- --------------------------------------------------
@@ -492,9 +563,9 @@ scene Game {
   Prefab        アセット・初期値・生成設定をまとめたテンプレート
   Instance      実行時に存在する個々のオブジェクト
 
-ScratchのCloneはInstanceの実装手段の一つとする。ただし、大量のオブジェクトではSoAによる独自管理も選択できるようにする。
+ScratchのCloneはInstanceの実装手段の一つとする。ただし、大量のオブジェクトではSoAによる独自管理も選択できるようにする。Clone と Prefab は `.rks` 初期版の対象外とする。
 
-### 7.5 Prefab
+### 7.6 Prefab
 
 ``` rust
 prefab Enemy {
@@ -512,8 +583,8 @@ prefab Enemy {
 
 ``` rust
 scene Game {
-    spawn Enemy at (100, 50)
-    spawn Enemy at (200, 80)
+    Enemy.spawn(100, 50)
+    Enemy.spawn(200, 80)
 }
 ```
 
@@ -598,7 +669,7 @@ Prefabはクラスそのものではなく、生成時のアセット・初期�
 ### Phase 6：並行処理
 
 -   スレッド・タスクの概念
--   Mutex / try_lock
+-   Mutex / tryLock
 -   所有者ID
 -   Channel
 -   WaitGroup
