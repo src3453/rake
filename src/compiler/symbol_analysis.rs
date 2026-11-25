@@ -20,6 +20,7 @@ fn symbol_occurrence(
         parameter: symbol.argument_id.is_some(),
         function: false,
         event_handler: false,
+        event_message: false,
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: symbol.ty == Type::ScratchList,
@@ -35,7 +36,6 @@ fn symbol_occurrence(
 fn event_symbol_occurrence(
     source: &str,
     token: &Token,
-    name: &str,
     kind: &EventKind,
 ) -> SymbolOccurrence {
     let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
@@ -45,26 +45,53 @@ fn event_symbol_occurrence(
         .take(token.column - 1)
         .map(char::len_utf16)
         .sum::<usize>() as u32;
-    let signature = match kind {
-        EventKind::GreenFlag => "event greenFlag()".to_string(),
-        EventKind::KeyPressed(key) => format!("event keyPressed({key:?})"),
-        EventKind::BroadcastReceived(message) => {
-            format!("event broadcastReceived({message:?})")
-        }
-        EventKind::SpriteClicked => "event spriteClicked()".to_string(),
-        EventKind::CloneStart => "event cloneStart()".to_string(),
-        EventKind::BackdropSwitchedTo(backdrop) => {
-            format!("event backdropSwitchedTo({backdrop:?})")
-        }
+    let (symbol_id, name, signature, event_message) = match kind {
+        EventKind::GreenFlag => (
+            format!("scratch-event:{}:{}", token.line, token.column),
+            "greenFlag".to_string(),
+            "event Scratch.Events.greenFlag".to_string(),
+            false,
+        ),
+        EventKind::KeyPressed(key) => (
+            format!("scratch-event:{}:{}", token.line, token.column),
+            "keyPressed".to_string(),
+            format!("event Scratch.Events.keyPressed({key:?})"),
+            false,
+        ),
+        EventKind::Message(message) => (
+            format!("message:{message}"),
+            message.clone(),
+            format!("event {message}"),
+            true,
+        ),
+        EventKind::SpriteClicked => (
+            format!("scratch-event:{}:{}", token.line, token.column),
+            "spriteClicked".to_string(),
+            "event Scratch.Events.spriteClicked".to_string(),
+            false,
+        ),
+        EventKind::CloneStart => (
+            format!("scratch-event:{}:{}", token.line, token.column),
+            "cloneStart".to_string(),
+            "event Scratch.Events.cloneStart".to_string(),
+            false,
+        ),
+        EventKind::BackdropSwitchedTo(backdrop) => (
+            format!("scratch-event:{}:{}", token.line, token.column),
+            "backdropSwitchedTo".to_string(),
+            format!("event Scratch.Events.backdropSwitchedTo({backdrop:?})"),
+            false,
+        ),
     };
     SymbolOccurrence {
-        symbol_id: format!("event:{name}"),
-        name: name.to_string(),
+        symbol_id,
+        name,
         ty: signature,
         mutable: false,
         parameter: false,
         function: false,
         event_handler: true,
+        event_message,
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: false,
@@ -73,6 +100,39 @@ fn event_symbol_occurrence(
         character,
         length: token.text.encode_utf16().count() as u32,
         declaration: true,
+        modification: false,
+    }
+}
+
+fn message_reference_occurrence(
+    source: &str,
+    token: &Token,
+    message: &str,
+) -> SymbolOccurrence {
+    let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
+    let character = line_text
+        .trim_end_matches('\r')
+        .chars()
+        .take(token.column - 1)
+        .map(char::len_utf16)
+        .sum::<usize>() as u32;
+    SymbolOccurrence {
+        symbol_id: format!("message:{message}"),
+        name: message.to_string(),
+        ty: format!("event {message}"),
+        mutable: false,
+        parameter: false,
+        function: false,
+        event_handler: true,
+        event_message: true,
+        class_symbol: false,
+        namespace_symbol: false,
+        scratch_list: false,
+        private_member: false,
+        line: (token.line - 1) as u32,
+        character,
+        length: token.text.encode_utf16().count() as u32,
+        declaration: false,
         modification: false,
     }
 }
@@ -129,6 +189,7 @@ fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> Symbo
         parameter: false,
         function: false,
         event_handler: false,
+        event_message: false,
         class_symbol: false,
         namespace_symbol: true,
         scratch_list: false,
@@ -162,6 +223,7 @@ fn function_symbol_occurrence(
         parameter: false,
         function: true,
         event_handler: false,
+        event_message: false,
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: false,
@@ -372,15 +434,23 @@ fn collect_statement_symbols(
                 collect_statement_symbols(source, body, output);
             }
             Stmt::Event {
-                name_token,
-                name,
+                type_token,
                 kind: Some(kind),
                 body,
                 ..
             } => {
-                output.push(event_symbol_occurrence(source, name_token, name, kind));
+                output.push(event_symbol_occurrence(source, type_token, kind));
                 collect_statement_symbols(source, body, output);
             }
+            Stmt::Send {
+                message_token,
+                message,
+                ..
+            } => output.push(message_reference_occurrence(
+                source,
+                message_token,
+                message,
+            )),
             Stmt::Call {
                 token,
                 receiver,

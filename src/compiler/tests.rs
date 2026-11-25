@@ -63,20 +63,28 @@ mod tests {
     #[test]
     fn emits_independent_scratch_event_scripts() {
         let source = r#"
-event greenFlag() main {
+use Scratch.Events as Events
+event Events.greenFlag {
     Scratch.Looks.say("start")
+    send reset
 }
-event keyPressed("space") onSpace {
+event Events.keyPressed("space") {
     Scratch.Looks.say("space")
 }
-event broadcastReceived("reset") onReset {
+event Events.keyPressed("space") {
+    Scratch.Looks.say("space again")
+}
+event reset {
     Scratch.Looks.say("reset")
 }
-event backdropSwitchedTo("backdrop1") onBackdrop {
+event reset {
+    Scratch.Looks.say("reset again")
+}
+event Events.backdropSwitchedTo("backdrop1") {
     Scratch.Looks.say("backdrop")
 }
-event spriteClicked() onClick {}
-event cloneStart() onClone {}
+event Events.spriteClicked {}
+event Events.cloneStart {}
 "#;
         let (project, _) = source_project(source);
         let blocks = project["targets"][1]["blocks"].as_object().unwrap();
@@ -84,7 +92,7 @@ event cloneStart() onClone {}
             .values()
             .filter(|block| block["topLevel"] == true)
             .collect();
-        assert_eq!(hats.len(), 6);
+        assert_eq!(hats.len(), 8);
 
         let by_opcode = |opcode: &str| {
             hats.iter()
@@ -97,8 +105,21 @@ event cloneStart() onClone {}
         let key = by_opcode("event_whenkeypressed");
         assert_eq!(key["fields"]["KEY_OPTION"][0], "space");
         assert!(!key["next"].is_null());
-        let broadcast = by_opcode("event_whenbroadcastreceived");
-        assert_eq!(broadcast["fields"]["BROADCAST_OPTION"][0], "reset");
+        assert_eq!(
+            hats.iter()
+                .filter(|block| block["opcode"] == "event_whenkeypressed")
+                .count(),
+            2
+        );
+        let broadcast_hats = hats
+            .iter()
+            .filter(|block| block["opcode"] == "event_whenbroadcastreceived")
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(broadcast_hats.len(), 2);
+        assert!(broadcast_hats
+            .iter()
+            .all(|block| block["fields"]["BROADCAST_OPTION"][0] == "reset"));
         let broadcast_id = project["targets"][0]["broadcasts"]
             .as_object()
             .unwrap()
@@ -106,8 +127,17 @@ event cloneStart() onClone {}
             .find(|(_, value)| *value == "reset")
             .unwrap()
             .0;
+        assert!(broadcast_hats.iter().all(|block| {
+            block["fields"]["BROADCAST_OPTION"][1].as_str() == Some(broadcast_id.as_str())
+        }));
+        let send = blocks
+            .values()
+            .find(|block| block["opcode"] == "event_broadcast")
+            .expect("message send block");
+        let menu_id = send["inputs"]["BROADCAST_INPUT"][1].as_str().unwrap();
+        assert_eq!(blocks[menu_id]["fields"]["BROADCAST_OPTION"][0], "reset");
         assert_eq!(
-            broadcast["fields"]["BROADCAST_OPTION"][1].as_str(),
+            blocks[menu_id]["fields"]["BROADCAST_OPTION"][1].as_str(),
             Some(broadcast_id.as_str())
         );
         let backdrop = by_opcode("event_whenbackdropswitchesto");
@@ -127,7 +157,7 @@ event cloneStart() onClone {}
     #[test]
     fn merges_module_runtime_statements_into_single_explicit_green_flag() {
         let (project, _) = source_project(
-            "var score: int = 0\nevent greenFlag() main { score += 1 }",
+            "use Scratch.Events.greenFlag\nvar score: int = 0\nevent greenFlag { score += 1 }",
         );
         let blocks = project["targets"][1]["blocks"].as_object().unwrap();
         let hats: Vec<_> = blocks
@@ -141,29 +171,50 @@ event cloneStart() onClone {}
         let second = blocks[first]["next"].as_str().unwrap();
         assert_eq!(blocks[second]["opcode"], "data_setvariableto");
         assert!(compile_source(
-            "var score: int = 0\nevent greenFlag() main {}\nevent greenFlag() secondary {}"
+            "use Scratch.Events.greenFlag\nvar score: int = 0\nevent greenFlag {}\nevent greenFlag {}"
         )
         .unwrap_err()
         .contains("multiple greenFlag handlers"));
     }
 
     #[test]
-    fn validates_event_types_values_and_handler_names() {
-        assert!(compile_source("event unknown() main {}")
+    fn validates_builtin_event_selectors_and_custom_message_syntax() {
+        assert!(compile_source("event unknown() {}")
             .unwrap_err()
-            .contains("unknown event type"));
-        assert!(compile_source("event greenFlag(1) main {}")
+            .contains("unknown Scratch event"));
+        assert!(compile_source("use Scratch.Events.greenFlag\nevent greenFlag() {}")
             .unwrap_err()
-            .contains("expects no values"));
-        assert!(compile_source("event keyPressed(1) onSpace {}")
+            .contains("takes no arguments or parentheses"));
+        assert!(compile_source("use Scratch.Events as E\nevent E.keyPressed(1) {}")
             .unwrap_err()
             .contains("value must be a string literal"));
-        assert!(compile_source("event greenFlag() main {}\nevent spriteClicked() main {}")
+        assert!(compile_source("event first() {}")
             .unwrap_err()
-            .contains("event handler \"main\" is already declared"));
-        assert!(compile_source("ns Game { event greenFlag() main {} }")
+            .contains("unknown Scratch event"));
+        assert!(compile_source("event greenFlag() main {}")
+            .unwrap_err()
+            .contains("expected \"{\""));
+        assert!(compile_source("ns Game { event start {} }")
             .unwrap_err()
             .contains("must be declared at module scope"));
+    }
+
+    #[test]
+    fn imports_builtin_events_by_namespace_member_and_alias() {
+        source_project(
+            "use Scratch.Events as Events\nevent Events.greenFlag {}\nuse Scratch.Events.keyPressed as key\nevent key(\"space\") {}\nuse Scratch.Events.{spriteClicked, cloneStart}\nevent spriteClicked {}\nevent cloneStart {}",
+        );
+        source_project("event Scratch.Events.backdropSwitchedTo(\"backdrop1\") {}");
+        let (project, _) = source_project(
+            "use Scratch.Events.greenFlag\nevent greenFlag {}\nevent greenFlag {}",
+        );
+        let green_flags = project["targets"][1]["blocks"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|block| block["opcode"] == "event_whenflagclicked")
+            .count();
+        assert_eq!(green_flags, 2);
     }
 
     #[test]

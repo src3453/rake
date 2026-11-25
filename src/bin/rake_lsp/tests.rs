@@ -80,35 +80,77 @@ mod tests {
             .iter()
             .find(|item| item["label"] == "event")
             .unwrap();
-        assert!(event["insertText"].as_str().unwrap().contains("greenFlag"));
+        assert!(event["insertText"]
+            .as_str()
+            .unwrap()
+            .contains("Scratch.Events.greenFlag"));
+        let send_keyword = completion_at("sen", 3);
+        assert!(send_keyword.iter().any(|item| item["label"] == "send"));
 
-        let event_types = completion_at("event key", 9);
-        assert!(event_types.iter().any(|item| item["label"] == "keyPressed"));
+        let event_types = completion_at("event Scratch.Events.key", 24);
+        assert!(event_types
+            .iter()
+            .any(|item| item["label"] == "keyPressed"));
         let all_event_types = completion_at("event ", 6);
         assert!(all_event_types
             .iter()
-            .any(|item| item["label"] == "broadcastReceived"));
+            .any(|item| item["label"] == "Scratch.Events.greenFlag"));
+        let event_import_items = completion_at("use Scratch.Events.{", 20);
+        assert!(event_import_items
+            .iter()
+            .any(|item| item["label"] == "greenFlag"));
+        let alias_event_source = "use Scratch.Events as E\nevent E.";
+        let alias_event_items = completion_items(
+            Some(&document(alias_event_source)),
+            &json!({"position": {"line": 1, "character": 8}}),
+        );
+        assert!(alias_event_items
+            .iter()
+            .any(|item| item["label"] == "keyPressed"));
+        let selected_event_source = "use Scratch.Events.greenFlag\nevent greenF";
+        let selected_event_items = completion_items(
+            Some(&document(selected_event_source)),
+            &json!({"position": {"line": 1, "character": 12}}),
+        );
+        assert!(selected_event_items
+            .iter()
+            .any(|item| item["label"] == "greenFlag"));
+        let custom_event_source = "event ready {}\nevent re";
+        let custom_event_items = completion_items(
+            Some(&document(custom_event_source)),
+            &json!({"position": {"line": 1, "character": 8}}),
+        );
+        assert!(custom_event_items
+            .iter()
+            .any(|item| item["label"] == "ready"));
 
-        let text = "event keyPressed(\"space\") onSpace {}";
+        let text = "use Scratch.Events as E\nevent E.keyPressed(\"space\") {}";
         let tokens = source_tokens(text).unwrap();
         let event_keyword = tokens.iter().find(|token| token.text == "event").unwrap();
         let event_type = tokens
             .iter()
             .find(|token| token.text == "keyPressed")
             .unwrap();
-        let handler = tokens.iter().find(|token| token.text == "onSpace").unwrap();
         assert_eq!(
             semantic_type_at(text, event_keyword.line, event_keyword.start_character),
             Some(2)
         );
         assert_eq!(
             semantic_type_at(text, event_type.line, event_type.start_character),
-            Some(1)
-        );
-        assert_eq!(
-            semantic_type_at(text, handler.line, handler.start_character),
             Some(5)
         );
+        let send_completion_text = "event ready {}\nsend re";
+        let send_completions = completion_items(
+            Some(&document(send_completion_text)),
+            &json!({"position": {"line": 1, "character": 7}}),
+        );
+        assert!(send_completions.iter().any(|item| item["label"] == "ready"));
+
+        let message_tokens = "event ready {}\nsend ready";
+        let send_keyword_start = message_tokens.lines().nth(1).unwrap().find("send").unwrap();
+        let send_name_start = message_tokens.lines().nth(1).unwrap().find("ready").unwrap();
+        assert_eq!(semantic_type_at(message_tokens, 1, send_keyword_start as u32), Some(2));
+        assert_eq!(semantic_type_at(message_tokens, 1, send_name_start as u32), Some(5));
     }
 
     #[test]
@@ -230,29 +272,30 @@ mod tests {
 
     #[test]
     fn event_handlers_have_hover_and_document_symbols() {
-        let text = "event greenFlag() main {}";
+        let text = "use Scratch.Events.greenFlag as start\nevent start {}";
         let document = document(text);
-        let name_start = text.find("main").unwrap() as u32;
+        let name_start = text.lines().nth(1).unwrap().find("start").unwrap() as u32;
         let hover = hover_result(
             &document,
             Position {
-                line: 0,
+                line: 1,
                 character: name_start,
             },
         );
         assert!(hover["contents"]["value"]
             .as_str()
             .unwrap()
-            .contains("event greenFlag()"));
+            .contains("event Scratch.Events.greenFlag"));
 
         let declaration = definition_result(
             "file:///events.rk",
             &document,
             Position {
-                line: 0,
+                line: 1,
                 character: name_start,
             },
         );
+        assert_eq!(declaration["range"]["start"]["line"], 1);
         assert_eq!(declaration["range"]["start"]["character"], name_start);
 
         let symbols = document_symbols(&document);
@@ -260,10 +303,33 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|symbol| symbol["name"] == "main")
+            .find(|symbol| symbol["name"] == "greenFlag")
             .unwrap();
         assert_eq!(handler["kind"], 24);
-        assert_eq!(handler["detail"], "event greenFlag()");
+        assert_eq!(handler["detail"], "event Scratch.Events.greenFlag");
+    }
+
+    #[test]
+    fn custom_messages_navigate_and_rename_across_receivers_and_sends() {
+        let text = "event ready {}\nsend ready\nevent ready {}";
+        let document = document(text);
+        let send_character = text.lines().nth(1).unwrap().find("ready").unwrap() as u32;
+        let send_position = Position {
+            line: 1,
+            character: send_character,
+        };
+        let hover = hover_result(&document, send_position);
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Custom Scratch broadcast message"));
+        let definition = definition_result("file:///messages.rk", &document, send_position);
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        assert_eq!(definition["range"]["start"]["character"], 6);
+        let references = references_result("file:///messages.rk", &document, send_position, true);
+        assert_eq!(references.as_array().unwrap().len(), 3);
+        let rename = rename_result("file:///messages.rk", &document, send_position, "readyAgain");
+        assert_eq!(rename["changes"]["file:///messages.rk"].as_array().unwrap().len(), 3);
     }
 
     #[test]

@@ -442,14 +442,16 @@ Scratchのイベントスクリプト、クローン、協調実行モデルを�
 イベント構文の候補：
 
 ``` rust
-event start {
+use Scratch.Events as Events
+
+event Events.greenFlag {
     loop {
         update()
         yield()
     }
 }
 
-event key("space") {
+event Events.keyPressed("space") {
     jump()
 }
 ```

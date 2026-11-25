@@ -1,6 +1,6 @@
 use rake::{
     SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols, builtin_block_descriptions,
-    compile_source, source_tokens,
+    builtin_event_descriptions, compile_source, source_tokens,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};

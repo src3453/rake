@@ -63,7 +63,7 @@ fn lower_statement_list(
     for mut statement in source_statements {
         let mut before = Vec::new();
         match &mut statement {
-            Stmt::Use { .. } | Stmt::Class { .. } => {}
+            Stmt::Use { .. } | Stmt::Class { .. } | Stmt::Send { .. } => {}
             Stmt::Namespace { body, .. } => {
                 lower_statement_list(body, symbols, allocator)?;
             }

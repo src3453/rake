@@ -41,14 +41,16 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|class|public|private|fn|warp|event|if|else|while|return|self)\\b"
+          "match": "\\b(var|const|class|public|private|fn|warp|event|send|if|else|while|return|self)\\b"
         }
       ]
     },
     "events": {
       "patterns": [
-        {"name": "storage.type.event.rake", "match": "(?<=\\bevent\\s)(greenFlag|keyPressed|broadcastReceived|backdropSwitchedTo|spriteClicked|cloneStart)\\b"},
-        {"name": "entity.name.function.rake", "match": "(?<=\\)\\s)[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\{)"}
+        {"name": "storage.type.event.rake", "match": "(?<=\\.)(greenFlag|keyPressed|backdropSwitchedTo|spriteClicked|cloneStart)\\b(?=\\s*(?:\\(|\\{))"},
+        {"name": "storage.type.event.rake", "match": "(?<=\\bevent\\s)(greenFlag|keyPressed|backdropSwitchedTo|spriteClicked|cloneStart)\\b(?=\\s*(?:\\(|\\{))"},
+        {"name": "entity.name.event.rake", "match": "(?<=\\bevent\\s)[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\{)"},
+        {"name": "entity.name.event.rake", "match": "(?<=\\bsend\\s)[A-Za-z_][A-Za-z0-9_]*\\b"}
       ]
     },
     "types": {

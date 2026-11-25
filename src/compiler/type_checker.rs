@@ -13,7 +13,6 @@ struct TypeChecker {
     current_method_class: Option<u32>,
     next_object_ordinal: u32,
     used_proccodes: std::collections::HashSet<String>,
-    event_names: std::collections::HashSet<String>,
 }
 
 impl TypeChecker {
@@ -33,7 +32,6 @@ impl TypeChecker {
             current_method_class: None,
             next_object_ordinal: 0,
             used_proccodes: std::collections::HashSet::new(),
-            event_names: std::collections::HashSet::new(),
         }
     }
 

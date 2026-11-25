@@ -25,44 +25,60 @@ impl TypeChecker {
     fn event_kind(
         type_token: &Token,
         event_type: &str,
+        resolved_event_type: &str,
         values: &[Expr],
+        has_parentheses: bool,
     ) -> Result<EventKind, String> {
-        match event_type {
-            "greenFlag" if values.is_empty() => Ok(EventKind::GreenFlag),
-            "greenFlag" => Err(diagnostic(
+        match resolved_event_type {
+            "Scratch.Events.greenFlag" if values.is_empty() && !has_parentheses => {
+                Ok(EventKind::GreenFlag)
+            }
+            "Scratch.Events.greenFlag" => Err(diagnostic(
                 type_token,
-                format!("event greenFlag expects no values, got {}", values.len()),
+                "event Scratch.Events.greenFlag takes no arguments or parentheses",
             )),
-            "keyPressed" => Ok(EventKind::KeyPressed(Self::event_text_value(
+            "Scratch.Events.keyPressed" if has_parentheses => {
+                Ok(EventKind::KeyPressed(Self::event_text_value(
                 type_token,
-                event_type,
+                "Scratch.Events.keyPressed",
                 values,
-            )?)),
-            "broadcastReceived" => Ok(EventKind::BroadcastReceived(Self::event_text_value(
+                )?))
+            }
+            "Scratch.Events.keyPressed" => Err(diagnostic(
                 type_token,
-                event_type,
-                values,
-            )?)),
-            "backdropSwitchedTo" => Ok(EventKind::BackdropSwitchedTo(Self::event_text_value(
-                type_token,
-                event_type,
-                values,
-            )?)),
-            "spriteClicked" if values.is_empty() => Ok(EventKind::SpriteClicked),
-            "spriteClicked" => Err(diagnostic(
-                type_token,
-                format!("event spriteClicked expects no values, got {}", values.len()),
+                "event Scratch.Events.keyPressed expects a string selector in parentheses",
             )),
-            "cloneStart" if values.is_empty() => Ok(EventKind::CloneStart),
-            "cloneStart" => Err(diagnostic(
+            "Scratch.Events.backdropSwitchedTo" if has_parentheses => {
+                Ok(EventKind::BackdropSwitchedTo(Self::event_text_value(
+                    type_token,
+                    "Scratch.Events.backdropSwitchedTo",
+                    values,
+                )?))
+            }
+            "Scratch.Events.backdropSwitchedTo" => Err(diagnostic(
                 type_token,
-                format!("event cloneStart expects no values, got {}", values.len()),
+                "event Scratch.Events.backdropSwitchedTo expects a string selector in parentheses",
             )),
+            "Scratch.Events.spriteClicked" if values.is_empty() && !has_parentheses => {
+                Ok(EventKind::SpriteClicked)
+            }
+            "Scratch.Events.spriteClicked" => Err(diagnostic(
+                type_token,
+                "event Scratch.Events.spriteClicked takes no arguments or parentheses",
+            )),
+            "Scratch.Events.cloneStart" if values.is_empty() && !has_parentheses => {
+                Ok(EventKind::CloneStart)
+            }
+            "Scratch.Events.cloneStart" => Err(diagnostic(
+                type_token,
+                "event Scratch.Events.cloneStart takes no arguments or parentheses",
+            )),
+            _ if !has_parentheses && values.is_empty() && !event_type.contains('.') => {
+                Ok(EventKind::Message(event_type.to_string()))
+            }
             _ => Err(diagnostic(
                 type_token,
-                format!(
-                    "unknown event type {event_type:?}; expected greenFlag, keyPressed, broadcastReceived, backdropSwitchedTo, spriteClicked, or cloneStart"
-                ),
+                format!("unknown Scratch event {event_type:?}; custom messages use `event name {{ ... }}`"),
             )),
         }
     }
@@ -224,24 +240,27 @@ impl TypeChecker {
             Stmt::Class { .. } => Ok(()),
             Stmt::Function { .. } => Ok(()),
             Stmt::Event {
-                name_token,
-                name,
                 type_token,
                 event_type,
                 values,
+                has_parentheses,
                 kind,
                 body,
                 ..
             } => {
-                if !self.event_names.insert(name.clone()) {
-                    return Err(diagnostic(
-                        name_token,
-                        format!("event handler {name:?} is already declared"),
-                    ));
-                }
-                *kind = Some(Self::event_kind(type_token, event_type, values)?);
+                let resolved_event_type = self
+                    .import_for(event_type, "")
+                    .unwrap_or_else(|| event_type.clone());
+                *kind = Some(Self::event_kind(
+                    type_token,
+                    event_type,
+                    &resolved_event_type,
+                    values,
+                    *has_parentheses,
+                )?);
                 self.check_statements(body, true)
             }
+            Stmt::Send { .. } => Ok(()),
             Stmt::Return { token, value } => {
                 let Some(function) = self.current_function.clone() else {
                     return Err(diagnostic(token, "return is only valid inside a function"));

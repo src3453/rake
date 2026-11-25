@@ -57,6 +57,20 @@ impl ScratchBuilder {
         self.blocks.get_mut(block_id).unwrap()["inputs"][name] = value;
     }
 
+    fn emit_message_send(&mut self, message: &str, parent: &str) -> String {
+        let id = self.block("event_broadcast", Some(parent), false, json!({}));
+        let broadcast_id = self.broadcast_id(message);
+        let menu_id = self.block(
+            "event_broadcast_menu",
+            Some(&id),
+            false,
+            json!({"BROADCAST_OPTION": [message, broadcast_id]}),
+        );
+        self.blocks.get_mut(&menu_id).unwrap()["shadow"] = json!(true);
+        self.input(&id, "BROADCAST_INPUT", json!([1, menu_id]));
+        id
+    }
+
     fn emit_event_script(&mut self, event: &Stmt, leading: &[Stmt]) -> Result<(), String> {
         let Stmt::Event {
             kind: Some(kind), body, ..
@@ -71,7 +85,7 @@ impl ScratchBuilder {
                 fields.insert("KEY_OPTION".to_string(), json!([key, null]));
                 "event_whenkeypressed"
             }
-            EventKind::BroadcastReceived(message) => {
+            EventKind::Message(message) => {
                 let id = self.broadcast_id(message);
                 fields.insert("BROADCAST_OPTION".to_string(), json!([message, id]));
                 "event_whenbroadcastreceived"
@@ -397,6 +411,7 @@ impl ScratchBuilder {
                 builtin: Some(builtin),
                 ..
             } => self.emit_builtin(builtin, arguments, parent),
+            Stmt::Send { message, .. } => Ok(self.emit_message_send(message, parent)),
             Stmt::Function { .. } | Stmt::Call { .. } => {
                 Err("internal error: unresolved function call".to_string())
             }
@@ -832,6 +847,7 @@ pub struct SymbolOccurrence {
     pub parameter: bool,
     pub function: bool,
     pub event_handler: bool,
+    pub event_message: bool,
     pub class_symbol: bool,
     pub namespace_symbol: bool,
     pub scratch_list: bool,

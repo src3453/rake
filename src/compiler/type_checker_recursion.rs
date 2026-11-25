@@ -42,7 +42,7 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
 fn collect_statement_calls(statements: &[Stmt], calls: &mut Vec<String>) {
     for statement in statements {
         match statement {
-            Stmt::Use { .. } => {}
+            Stmt::Use { .. } | Stmt::Send { .. } => {}
             Stmt::Namespace { body, .. } => collect_statement_calls(body, calls),
             Stmt::Class { .. } => {}
             Stmt::Function { body, .. } => collect_statement_calls(body, calls),

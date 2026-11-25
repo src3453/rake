@@ -90,6 +90,7 @@ impl TypeChecker {
                         let final_path_is_symbol = self.functions.contains_key(namespace)
                             || self.classes.contains_key(namespace)
                             || builtin_block(namespace).is_some()
+                            || builtin_event(namespace).is_some()
                             || builtin_type_path(namespace).is_some();
                         if !self.namespaces.contains(namespace) && !final_path_is_symbol {
                             return Err(diagnostic(
@@ -109,11 +110,12 @@ impl TypeChecker {
                             if !self.functions.contains_key(&target)
                                 && !self.classes.contains_key(&target)
                                 && builtin_block(&target).is_none()
+                                && builtin_event(&target).is_none()
                                 && builtin_type_path(&target).is_none()
                             {
                                 return Err(diagnostic(
                                     member_token,
-                                    format!("unknown function or class {target:?}"),
+                                    format!("unknown function, class, or event {target:?}"),
                                 ));
                             }
                         }

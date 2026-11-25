@@ -30,11 +30,30 @@
   "Event handler": {
     "prefix": "event",
     "body": [
-      "event ${1:greenFlag}() ${2:main} {",
+      "event ${1:Scratch.Events.greenFlag} {",
       "    $0",
       "}"
     ],
     "description": "Declare a Scratch event handler"
+  },
+  "Custom message receiver": {
+    "prefix": "eventmsg",
+    "body": [
+      "event ${1:message} {",
+      "    $0",
+      "}"
+    ],
+    "description": "Receive a Scratch broadcast message"
+  },
+  "Send custom message": {
+    "prefix": "send",
+    "body": "send ${1:message}",
+    "description": "Broadcast a custom Scratch message"
+  },
+  "Import Scratch events": {
+    "prefix": "useevents",
+    "body": "use Scratch.Events as Events",
+    "description": "Import Scratch built-in events with an alias"
   },
   "Class declaration": {
     "prefix": "class",

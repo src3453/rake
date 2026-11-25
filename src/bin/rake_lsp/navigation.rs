@@ -121,7 +121,12 @@ fn hover_result(document: &Document, position: Position) -> Value {
     let Some(occurrence) = occurrence_at(&occurrences, position) else {
         return Value::Null;
     };
-    let (signature, description) = if occurrence.event_handler {
+    let (signature, description) = if occurrence.event_message {
+        (
+            occurrence.ty.clone(),
+            "Custom Scratch broadcast message shared by its send statements and receiver scripts.",
+        )
+    } else if occurrence.event_handler {
         (
             occurrence.ty.clone(),
             "Scratch event handler; its body runs as an independent script.",

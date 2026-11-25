@@ -1,3 +1,46 @@
+fn event_insert_text(name: &str, event: &rake::BuiltinEventDescription) -> String {
+    let selector = match event.member {
+        "keyPressed" => Some("${1:space}"),
+        "backdropSwitchedTo" => Some("${1:backdrop1}"),
+        _ => None,
+    };
+    match selector {
+        Some(selector) => format!("{name}(\"{selector}\") {{\n\t$0\n}}"),
+        None => format!("{name} {{\n\t$0\n}}"),
+    }
+}
+
+fn declared_custom_messages(tokens: &[SourceToken]) -> Vec<String> {
+    let mut builtin_aliases = std::collections::HashSet::new();
+    for event in builtin_event_descriptions() {
+        if source_namespace_alias(tokens, event.member).as_deref() == Some(event.name) {
+            builtin_aliases.insert(event.member.to_string());
+        }
+        for (local, target) in source_imported_names(tokens) {
+            if target == event.name {
+                builtin_aliases.insert(local);
+            }
+        }
+    }
+    let mut messages = std::collections::BTreeSet::new();
+    for index in 0..tokens.len() {
+        if tokens[index].text != "event" {
+            continue;
+        }
+        let Some(name) = tokens.get(index + 1) else {
+            continue;
+        };
+        if name.kind != SourceTokenKind::Identifier
+            || tokens.get(index + 2).map(|token| token.text.as_str()) != Some("{")
+            || builtin_aliases.contains(&name.text)
+        {
+            continue;
+        }
+        messages.insert(name.text.clone());
+    }
+    messages.into_iter().collect()
+}
+
 fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let position = position_from_params(params).unwrap_or(Position {
         line: 0,
@@ -10,53 +53,102 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let type_context = is_type_context(&tokens, position, &prefix);
     let member_receiver = member_receiver_at(&tokens, position, &prefix);
 
+    if let Some(namespace) = event_member_namespace_at(&tokens, position, &prefix) {
+        let resolved_namespace =
+            resolved_namespace_alias(&tokens, &namespace).unwrap_or_else(|| namespace.clone());
+        if resolved_namespace == "Scratch" {
+            if "Events".starts_with(&prefix) {
+                return vec![json!({
+                    "label": "Events",
+                    "kind": 9,
+                    "detail": "Scratch standard events",
+                    "insertText": "Events.",
+                    "sortText": "0-Events"
+                })];
+            }
+            return Vec::new();
+        }
+        if resolved_namespace == "Scratch.Events" {
+            return builtin_event_descriptions()
+                .iter()
+                .filter(|event| event.member.starts_with(&prefix))
+                .map(|event| {
+                    let insert_text = event_insert_text(event.member, event);
+                    json!({
+                        "label": event.member,
+                        "kind": 14,
+                        "detail": format!("{} — {}", event.signature, event.description),
+                        "insertText": insert_text,
+                        "insertTextFormat": 2,
+                        "sortText": format!("0-{}", event.member)
+                    })
+                })
+                .collect();
+        }
+    }
+
     if event_type_context(&tokens, position, &prefix) {
-        let event_types = [
-            (
-                "greenFlag",
-                "Run when the green flag is clicked",
-                "greenFlag() ${1:main} {\n\t$0\n}",
-            ),
-            (
-                "keyPressed",
-                "Run when a key is pressed",
-                "keyPressed(\"${1:space}\") ${2:onSpace} {\n\t$0\n}",
-            ),
-            (
-                "broadcastReceived",
-                "Run when a broadcast is received",
-                "broadcastReceived(\"${1:message}\") ${2:onMessage} {\n\t$0\n}",
-            ),
-            (
-                "backdropSwitchedTo",
-                "Run when the backdrop switches to a name",
-                "backdropSwitchedTo(\"${1:backdrop1}\") ${2:onBackdrop} {\n\t$0\n}",
-            ),
-            (
-                "spriteClicked",
-                "Run when this sprite is clicked",
-                "spriteClicked() ${1:onClick} {\n\t$0\n}",
-            ),
-            (
-                "cloneStart",
-                "Run when this clone starts",
-                "cloneStart() ${1:onCloneStart} {\n\t$0\n}",
-            ),
-        ];
-        return event_types
-            .iter()
-            .filter(|(name, _, _)| name.starts_with(&prefix))
-            .map(|(name, detail, insert_text)| {
-                json!({
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for event in builtin_event_descriptions() {
+            let mut names = vec![event.name.to_string()];
+            if source_namespace_alias(&tokens, event.member).as_deref() == Some(event.name) {
+                names.push(event.member.to_string());
+            }
+            for (local, target) in source_imported_names(&tokens) {
+                if target == "Scratch.Events" {
+                    names.push(format!("{local}.{}", event.member));
+                } else if target == event.name {
+                    names.push(local);
+                }
+            }
+            if resolved_namespace_alias(&tokens, "Events").as_deref() == Some("Scratch.Events") {
+                names.push(format!("Events.{}", event.member));
+            }
+            for name in names {
+                if !name.starts_with(&prefix) || !seen.insert(name.clone()) {
+                    continue;
+                }
+                items.push(json!({
                     "label": name,
                     "kind": 14,
-                    "detail": detail,
-                    "insertText": insert_text,
+                    "detail": format!("{} — {}", event.signature, event.description),
+                    "insertText": event_insert_text(&name, event),
                     "insertTextFormat": 2,
+                    "sortText": format!("0-{}", name)
+                }));
+            }
+        }
+        for name in declared_custom_messages(&tokens) {
+            if name.starts_with(&prefix) && seen.insert(name.clone()) {
+                items.push(json!({
+                    "label": name,
+                    "kind": 14,
+                    "detail": format!("Custom Scratch message: {name}"),
+                    "insertText": format!("{name} {{\n\t$0\n}}"),
+                    "insertTextFormat": 2,
+                    "sortText": format!("1-{name}")
+                }));
+            }
+        }
+        return items;
+    }
+
+    if send_message_context(&tokens, position, &prefix) {
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in declared_custom_messages(&tokens) {
+            if name.starts_with(&prefix) && seen.insert(name.clone()) {
+                items.push(json!({
+                    "label": name,
+                    "kind": 21,
+                    "detail": "Scratch broadcast message",
+                    "insertText": name,
                     "sortText": format!("0-{name}")
-                })
-            })
-            .collect();
+                }));
+            }
+        }
+        return items;
     }
 
     if type_context {
@@ -110,11 +202,28 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     }
 
     if let Some(namespace) = use_member_namespace_at(&tokens, position, &prefix) {
-        return builtin_block_descriptions()
+        let mut items = builtin_block_descriptions()
             .into_iter()
             .filter(|block| block.namespace == namespace && block.member.starts_with(&prefix))
             .map(|block| builtin_completion_item(&block, block.member, block.member))
-            .collect();
+            .collect::<Vec<_>>();
+        if namespace == "Scratch.Events" {
+            items.extend(
+                builtin_event_descriptions()
+                    .iter()
+                    .filter(|event| event.member.starts_with(&prefix))
+                    .map(|event| {
+                        json!({
+                            "label": event.member,
+                            "kind": 14,
+                            "detail": format!("{} — {}", event.signature, event.description),
+                            "insertText": event.member,
+                            "sortText": format!("0-{}", event.member)
+                        })
+                    }),
+            );
+        }
+        return items;
     }
 
     if let Some(receiver) = qualified_receiver_at(&tokens, position, &prefix) {
@@ -193,6 +302,7 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("ns", 14, "Namespace declaration"),
             ("use", 14, "Import a namespace or declaration"),
             ("event", 14, "Declare a Scratch event handler"),
+            ("send", 14, "Broadcast a custom Scratch message"),
             ("Scratch", 9, "Scratch built-in namespaces"),
             ("return", 14, "Return a value from a function"),
             ("true", 14, "Boolean literal"),
@@ -206,13 +316,15 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 "kind": kind,
                 "detail": detail,
                 "insertText": if label == "event" {
-                    "event ${1:greenFlag}() ${2:main} {\n\t$0\n}"
+                    "event Scratch.Events.greenFlag {\n\t$0\n}"
+                } else if label == "send" {
+                    "send ${1:message}"
                 } else if label == "warp" {
                     "warp fn ${1:name}() {\n\t$0\n}"
                 } else {
                     label
                 },
-                "insertTextFormat": if label == "event" || label == "warp" { 2 } else { 1 },
+                "insertTextFormat": if label == "event" || label == "send" || label == "warp" { 2 } else { 1 },
                 "sortText": format!("0-{label}")
             }));
         }

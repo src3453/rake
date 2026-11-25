@@ -15,7 +15,7 @@ cargo run --bin rake -- examples/basic.rk --emit-ir outputs/basic.ir
 cargo run --bin rake -- examples/basic.rk --emit-json outputs/basic.json
 ```
 
-生成した `.sb3` はScratch 3エディターで開けます。`event` 宣言ごとに独立したScratchスクリプトを生成します。従来どおりイベント外に書いた実行文も互換性のため維持し、`greenFlag()` ハンドラーが1つあればその本体の前に連結し、なければ暗黙の緑旗スクリプトにします。
+生成した `.sb3` はScratch 3エディターで開けます。`event` 宣言ごとに独立したScratchスクリプトを生成します。同じイベントやメッセージを受け取るハンドラーを複数宣言できます。イベント外に書いた実行文は、明示した`Scratch.Events.greenFlag`ハンドラーが1つあればその本体の前に連結し、なければ暗黙の緑旗スクリプトにします。
 
 `--emit-ir <path>` は型検査と関数呼び出しのLowering後にバックエンドへ渡す構文木をデバッグ用テキストとして書き出します。`--emit-json <path>` は `.sb3` に格納するプロジェクトJSONを整形して書き出します。どちらも `-o` / `--output` と併用でき、指定した出力だけを作る場合は `-o` を省略できます。例: `cargo run --bin rake -- examples/basic.rk --emit-json outputs/basic.json`
 
@@ -47,23 +47,26 @@ while score < limit {
 
 ## イベント
 
-トップレベルの `event <eventType>(<eventValue>...) <identifier> { ... }` でScratchのイベントハットと本体を宣言します。イベントハンドラー名はRake内で一意な識別名です。
+トップレベルの`event <event> { ... }`でScratchイベントハットと本体を宣言します。組み込みイベントは`Scratch.Events`からimportして使い、カスタムメッセージは名前をそのままイベント名にします。`send <message>`はそのメッセージをbroadcastします。
 
 ```rake
-event greenFlag() main {
+use Scratch.Events as Events
+
+event Events.greenFlag {
     Scratch.Looks.say("Ready")
+    send reset
 }
 
-event keyPressed("space") onSpace {
+event Events.keyPressed("space") {
     Scratch.Looks.say("Jump")
 }
 
-event broadcastReceived("reset") onReset {
+event reset {
     Scratch.Looks.say("Reset")
 }
 ```
 
-現在は `greenFlag()`, `keyPressed("...")`, `broadcastReceived("...")`, `backdropSwitchedTo("...")`, `spriteClicked()`, `cloneStart()` をサポートします。イベント値は文字列リテラルで指定します。イベント本体は独立したScratchスクリプトとして動作し、複数のイベント間に実行順序はありません。イベント外の実行文と複数の `greenFlag()` ハンドラーを併用すると初期化順を定められないため、コンパイルエラーになります。
+組み込みイベントは`Scratch.Events.greenFlag`、`keyPressed("...")`、`backdropSwitchedTo("...")`、`spriteClicked`、`cloneStart`です。`use Scratch.Events as Events`、`use Scratch.Events.{greenFlag, keyPressed}`、`use Scratch.Events.keyPressed as key`のようにimportでき、別名も使えます。キーと背景名は文字列リテラルで指定します。カスタムメッセージは`event reset { ... }`で受信し、`send reset`で送信します。同じイベントの受信スクリプトを複数宣言すると、Scratch上にも受信ハットが複数生成されます。イベント本体は独立したScratchスクリプトとして動作し、複数のイベント間に実行順序はありません。イベント外の実行文と複数の`greenFlag`ハンドラーを併用すると初期化順を定められないため、コンパイルエラーになります。
 
 動作例は [examples/events.rk](examples/events.rk) を参照してください。
 

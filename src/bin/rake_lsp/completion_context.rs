@@ -55,6 +55,46 @@ fn event_type_context(tokens: &[SourceToken], position: Position, prefix: &str) 
         .is_some_and(|token| token.text == "event")
 }
 
+fn event_member_namespace_at(
+    tokens: &[SourceToken],
+    position: Position,
+    prefix: &str,
+) -> Option<String> {
+    let prefix_start = Position {
+        line: position.line,
+        character: position
+            .character
+            .saturating_sub(prefix.encode_utf16().count() as u32),
+    };
+    let preceding: Vec<&SourceToken> = tokens
+        .iter()
+        .filter(|token| end_position(token) <= prefix_start)
+        .collect();
+    let event_index = preceding.iter().rposition(|token| token.text == "event")?;
+    if preceding[event_index + 1..]
+        .iter()
+        .any(|token| matches!(token.text.as_str(), "{" | "}" | ";"))
+        || preceding.last()?.text != "."
+    {
+        return None;
+    }
+    qualified_receiver_at(tokens, position, prefix)
+}
+
+fn send_message_context(tokens: &[SourceToken], position: Position, prefix: &str) -> bool {
+    let prefix_start = Position {
+        line: position.line,
+        character: position
+            .character
+            .saturating_sub(prefix.encode_utf16().count() as u32),
+    };
+    tokens
+        .iter()
+        .filter(|token| end_position(token) <= prefix_start)
+        .next_back()
+        .is_some_and(|token| token.text == "send")
+}
+
 fn member_receiver_at(tokens: &[SourceToken], position: Position, prefix: &str) -> Option<String> {
     let prefix_start = Position {
         line: position.line,

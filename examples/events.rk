@@ -1,12 +1,18 @@
-event greenFlag() main {
+use Scratch.Events as events
+
+event events.greenFlag {
     Scratch.Looks.say("Ready")
-    Scratch.Events.broadcast("begin")
+    send begin
 }
 
-event keyPressed("space") onSpace {
+event events.keyPressed("space") {
     Scratch.Looks.say("Space pressed")
 }
 
-event broadcastReceived("begin") onBegin {
+event begin {
     Scratch.Looks.say("Started")
+}
+
+event begin {
+    Scratch.Looks.say("A second script receives the same message")
 }

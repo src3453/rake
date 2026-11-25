@@ -88,10 +88,10 @@ enum ExprKind {
 enum EventKind {
     GreenFlag,
     KeyPressed(String),
-    BroadcastReceived(String),
     SpriteClicked,
     CloneStart,
     BackdropSwitchedTo(String),
+    Message(String),
 }
 
 #[derive(Clone, Debug)]
@@ -131,10 +131,13 @@ enum Stmt {
         type_token: Token,
         event_type: String,
         values: Vec<Expr>,
-        name_token: Token,
-        name: String,
+        has_parentheses: bool,
         kind: Option<EventKind>,
         body: Vec<Stmt>,
+    },
+    Send {
+        message_token: Token,
+        message: String,
     },
     Call {
         token: Token,
@@ -615,35 +618,50 @@ impl Parser {
 
     fn event_declaration(&mut self) -> Result<Stmt, String> {
         self.expect("event")?;
-        let type_token = self.expect_identifier()?;
-        let event_type = type_token.text.clone();
-        self.expect("(")?;
-        let mut values = Vec::new();
-        if !self.at(")") {
-            loop {
-                values.push(self.expression(1)?);
-                if !self.at(",") {
-                    break;
-                }
-                self.take();
-            }
+        let mut type_token = self.expect_identifier()?;
+        let mut event_type = type_token.text.clone();
+        while self.at(".") {
+            self.take();
+            type_token = self.expect_identifier()?;
+            event_type.push('.');
+            event_type.push_str(&type_token.text);
         }
-        self.expect(")")?;
-        let name_token = self.expect_identifier()?;
-        let name = name_token.text.clone();
+        let has_parentheses = self.at("(");
+        let mut values = Vec::new();
+        if has_parentheses {
+            self.take();
+            if !self.at(")") {
+                loop {
+                    values.push(self.expression(1)?);
+                    if !self.at(",") {
+                        break;
+                    }
+                    self.take();
+                }
+            }
+            self.expect(")")?;
+        }
         let body = self.block()?;
         Ok(Stmt::Event {
             type_token,
             event_type,
             values,
-            name_token,
-            name,
+            has_parentheses,
             kind: None,
             body,
         })
     }
 
     fn statement(&mut self) -> Result<Stmt, String> {
+        if self.at("send") {
+            self.take();
+            let message_token = self.expect_identifier()?;
+            let message = message_token.text.clone();
+            return Ok(Stmt::Send {
+                message_token,
+                message,
+            });
+        }
         if self.at("var") || self.at("const") {
             return self.declaration();
         }
@@ -720,7 +738,7 @@ impl Parser {
         }
         Err(diagnostic(
             self.current(),
-            "expected a variable declaration, assignment, function call, if, or while",
+            "expected a variable declaration, assignment, function call, send, if, or while",
         ))
     }
 

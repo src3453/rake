@@ -40,13 +40,6 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                 Some(types["type"])
             }
             SourceTokenKind::Identifier
-                if token_index > 0
-                    && tokens[token_index - 1].text == "event"
-                    && tokens.get(token_index + 1).is_some_and(|next| next.text == "(") =>
-            {
-                Some(types["type"])
-            }
-            SourceTokenKind::Identifier
                 if matches!(
                     token.text.as_str(),
                     "var"
@@ -58,6 +51,7 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                         | "fn"
                         | "warp"
                         | "event"
+                        | "send"
                         | "ns"
                         | "use"
                         | "as"
