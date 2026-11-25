@@ -1,4 +1,90 @@
 impl TypeChecker {
+    fn readable_type_name(&self, ty: Type) -> String {
+        match ty {
+            Type::Class(id) => self.classes.values().find(|class| class.id == id)
+                .map(|class| class.name.clone()).unwrap_or_else(|| ty.name().to_string()),
+            Type::Enum(id) => self.enums.values().find(|enumeration| enumeration.id == id)
+                .map(|enumeration| enumeration.name.clone()).unwrap_or_else(|| ty.name().to_string()),
+            _ => ty.name().to_string(),
+        }
+    }
+
+    fn register_enums(&mut self, statements: &[Stmt]) -> Result<(), String> {
+        fn collect_class_names(statements: &[Stmt], names: &mut std::collections::HashSet<String>) {
+            for statement in statements {
+                match statement {
+                    Stmt::Namespace { body, .. } => collect_class_names(body, names),
+                    Stmt::Class { name, .. } => { names.insert(name.clone()); }
+                    _ => {}
+                }
+            }
+        }
+        let mut class_names = std::collections::HashSet::new();
+        collect_class_names(statements, &mut class_names);
+        fn register(
+            checker: &mut TypeChecker,
+            statements: &[Stmt],
+            class_names: &std::collections::HashSet<String>,
+        ) -> Result<(), String> {
+            for statement in statements {
+                match statement {
+                    Stmt::Namespace { body, .. } => register(checker, body, class_names)?,
+                    Stmt::Enum { name_token, name, id, variants } => {
+                        if checker.enums.contains_key(name) || class_names.contains(name) {
+                            return Err(diagnostic(name_token, format!("type {name:?} is already declared")));
+                        }
+                        let mut variant_map = HashMap::new();
+                        for variant in variants {
+                            let info = EnumVariantInfo {
+                                token: variant.token.clone(),
+                                name: variant.name.clone(),
+                                value: variant.value,
+                            };
+                            if variant_map.insert(variant.name.clone(), info).is_some() {
+                                return Err(diagnostic(
+                                    &variant.token,
+                                    format!("enum variant {:?} is already declared", variant.name),
+                                ));
+                            }
+                        }
+                        checker.enums.insert(name.clone(), EnumInfo {
+                            name: name.clone(),
+                            id: *id,
+                            variants: variant_map,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        register(self, statements, &class_names)
+    }
+
+    fn enum_variant_constant(&self, expression: &Expr, namespace: &str) -> Option<(Type, Value)> {
+        let ExprKind::Member { object, name, .. } = &expression.kind else {
+            return None;
+        };
+        let path = qualified_expression_name(object)?;
+        let mut candidates = Vec::new();
+        if let Some(imported) = self.import_for(&path, namespace) {
+            candidates.push(imported);
+        }
+        candidates.push(path.clone());
+        let mut scope = namespace.split('.').collect::<Vec<_>>();
+        loop {
+            if !scope.is_empty() {
+                candidates.push(format!("{}.{}", scope.join("."), path));
+            }
+            if scope.pop().is_none() {
+                break;
+            }
+        }
+        let enum_info = candidates.iter().find_map(|candidate| self.enums.get(candidate))?;
+        let variant = enum_info.variants.get(name)?;
+        Some((Type::Enum(enum_info.id), json!(variant.value)))
+    }
+
     fn reserve_source_names(&mut self, statements: &[Stmt]) {
         fn collect(statements: &[Stmt], names: &mut std::collections::HashSet<String>) {
             for statement in statements {
@@ -41,7 +127,7 @@ impl TypeChecker {
                 proccode.push_str(match argument.ty {
                     Type::Bool => " %b",
                     Type::Text | Type::Any | Type::ScratchValue => " %s",
-                    Type::Int | Type::Float | Type::Class(_) => " %n",
+                    Type::Int | Type::Float | Type::Class(_) | Type::Enum(_) => " %n",
                     Type::ScratchList => unreachable!("Scratch lists cannot be method parameters"),
                 });
             }
@@ -105,10 +191,10 @@ impl TypeChecker {
             else {
                 continue;
             };
-            if self.classes.contains_key(name) {
+            if self.classes.contains_key(name) || self.enums.contains_key(name) {
                 return Err(diagnostic(
                     name_token,
-                    format!("class {name:?} is already declared"),
+                    format!("type {name:?} is already declared"),
                 ));
             }
             let mut field_names = std::collections::HashSet::new();
@@ -125,10 +211,13 @@ impl TypeChecker {
                         format!("field {:?} is already declared", field.name),
                     ));
                 }
-                let Some((initializer_type, _)) = constant_field_value(&field.initializer) else {
+                let class_scope = name.rsplit_once('.').map(|(scope, _)| scope).unwrap_or("");
+                let constant = constant_field_value(&field.initializer)
+                    .or_else(|| self.enum_variant_constant(&field.initializer, class_scope));
+                let Some((initializer_type, _)) = constant else {
                     return Err(diagnostic(
                         &field.initializer.token,
-                        "class field defaults must be numeric, boolean, or text literals",
+                        "class field defaults must be numeric, boolean, text, or enum constants",
                     ));
                 };
                 if !Self::assignable(field.ty, initializer_type) {
@@ -136,9 +225,9 @@ impl TypeChecker {
                         &field.initializer.token,
                         format!(
                             "cannot initialize {} field {:?} with {}",
-                            field.ty.name(),
+                            self.readable_type_name(field.ty),
                             field.name,
-                            initializer_type.name()
+                            self.readable_type_name(initializer_type)
                         ),
                     ));
                 }
@@ -334,13 +423,13 @@ impl TypeChecker {
             proccode.push_str(match argument.ty {
                 Type::Bool => " %b",
                 Type::Text | Type::Any | Type::ScratchValue => " %s",
-                Type::Int | Type::Float | Type::Class(_) => " %n",
+                Type::Int | Type::Float | Type::Class(_) | Type::Enum(_) => " %n",
                 Type::ScratchList => unreachable!("Scratch lists cannot be procedure arguments"),
             });
         }
         let signature_arguments = arguments
             .iter()
-            .map(|argument| format!("{}: {}", argument.name, argument.ty.name()))
+            .map(|argument| format!("{}: {}", argument.name, self.readable_type_name(argument.ty)))
             .collect::<Vec<_>>()
             .join(", ");
         let return_symbol = return_type.and_then(|ty| {
@@ -367,6 +456,12 @@ impl TypeChecker {
                 .values()
                 .find(|class| class.id == class_id)
                 .map(|class| class.name.clone())
+                .unwrap_or_else(|| ty.name().to_string()),
+            Type::Enum(enum_id) => self
+                .enums
+                .values()
+                .find(|enumeration| enumeration.id == enum_id)
+                .map(|enumeration| enumeration.name.clone())
                 .unwrap_or_else(|| ty.name().to_string()),
             _ => ty.name().to_string(),
         });

@@ -34,6 +34,7 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
         | ExprKind::Boolean(_)
         | ExprKind::Text(_)
         | ExprKind::ObjectInit { .. }
+        | ExprKind::EnumValue { .. }
         | ExprKind::ScratchListInit
         | ExprKind::Name { .. } => {}
     }
@@ -44,7 +45,7 @@ fn collect_statement_calls(statements: &[Stmt], calls: &mut Vec<String>) {
         match statement {
             Stmt::Use { .. } | Stmt::Send { .. } => {}
             Stmt::Namespace { body, .. } => collect_statement_calls(body, calls),
-            Stmt::Class { .. } => {}
+            Stmt::Class { .. } | Stmt::Enum { .. } => {}
             Stmt::Function { body, .. } => collect_statement_calls(body, calls),
             Stmt::Event { body, .. } => collect_statement_calls(body, calls),
             Stmt::Call {

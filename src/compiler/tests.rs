@@ -8,6 +8,25 @@ mod tests {
     }
 
     #[test]
+    fn expands_parameterized_macros_before_type_checking() {
+        let (project, _) = source_project(
+            "macro! declare (name, value) { var name: int = value }\ndeclare!(score, (2 + 3))",
+        );
+        assert_eq!(project["targets"][0]["variables"].as_object().unwrap().len(), 1);
+        assert!(compile_source("macro! bad (x) { var y: int = x }\nbad!()")
+            .unwrap_err()
+            .contains("expects 1 arguments, got 0"));
+    }
+
+    #[test]
+    fn expands_nested_and_repeated_macro_calls() {
+        let source = "macro! twice (value) { value + value }\nmacro! init (name, value) { var name: int = value }\ninit!(score, twice!(3))";
+        let (project, _) = source_project(source);
+        let variables = project["targets"][0]["variables"].as_object().unwrap();
+        assert!(variables.values().any(|variable| variable[0] == "score"));
+    }
+
+    #[test]
     fn emits_sb3_with_control_flow_and_standard_blocks() {
         let (project, assets) = source_project(
             "var count: int = 0\nvar enabled: bool = true\nif enabled && count < 3 { count += 1 }\nwhile count < 3 { count = count + 1 }",
@@ -30,6 +49,78 @@ mod tests {
             assert!(opcodes.contains(&opcode), "missing opcode {opcode}");
         }
         assert_eq!(assets.len(), 2);
+    }
+
+    #[test]
+    fn resolves_unit_enum_variants_to_typed_numeric_tags() {
+        let source = r#"
+enum State { Title, Playing, Paused }
+var state: State = State.Playing
+fn echo(value: State) -> State { return value }
+var next_state: State = echo(State.Paused)
+if state == State.Playing { Scratch.Looks.say("playing") }
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let opcodes = blocks
+            .values()
+            .map(|block| block["opcode"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(opcodes.contains(&"operator_equals"));
+        assert!(opcodes.contains(&"procedures_definition"));
+        assert!(opcodes.contains(&"data_setvariableto"));
+        assert!(blocks.values().any(|block| {
+            block["opcode"] == "data_setvariableto"
+                && block["inputs"]["VALUE"] == json!([1, [4, "1"]])
+        }));
+        assert!(blocks.values().any(|block| {
+            block["inputs"]
+                .as_object()
+                .is_some_and(|inputs| inputs.values().any(|input| *input == json!([1, [4, "2"]])))
+        }));
+    }
+
+    #[test]
+    fn enum_tags_initialize_class_fields_and_namespaced_imports() {
+        let source = r#"
+ns Game { enum State { Ready, Done } }
+use Game.State as State
+class Controller {
+    var state: State = State.Done
+    fn is_done() -> bool { return self.state == State.Done }
+}
+var controller: Controller = Controller()
+"#;
+        let (project, _) = source_project(source);
+        let variables = project["targets"][0]["variables"].as_object().unwrap();
+        assert!(variables
+            .values()
+            .any(|variable| variable[0] == "controller_state" && variable[1] == 1));
+    }
+
+    #[test]
+    fn rejects_invalid_enum_values_and_arithmetic() {
+        for (source, expected) in [
+            (
+                "enum A { One, Two } enum B { One, Two } var value: A = A.One value = B.One",
+                "cannot assign B to A variable",
+            ),
+            (
+                "enum A { One, Two } var value: A = A.Missing",
+                "enum \"A\" has no variant \"Missing\"",
+            ),
+            (
+                "enum A { One, Two } var value: A = A.One + A.Two",
+                "requires numeric operands",
+            ),
+            (
+                "enum A { One, One }",
+                "enum variant \"One\" is already declared",
+            ),
+        ] {
+            let error = compile_source(source).unwrap_err();
+            assert!(error.contains(expected), "expected {expected:?} in {error:?}");
+        }
     }
 
     #[test]

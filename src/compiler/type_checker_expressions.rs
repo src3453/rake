@@ -23,8 +23,8 @@ impl TypeChecker {
                     &argument.token,
                     format!(
                         "cannot pass {} to {} parameter {:?} of method {:?}",
-                        actual.name(),
-                        parameter.ty.name(),
+                        self.readable_type_name(actual),
+                        self.readable_type_name(parameter.ty),
                         parameter.name,
                         signature.name
                     ),
@@ -208,7 +208,7 @@ impl TypeChecker {
                     &argument.token,
                     format!(
                         "cannot pass {} to {expected} input {:?} of {:?}",
-                        actual.name(),
+                        self.readable_type_name(actual),
                         spec.name,
                         builtin.name
                     ),
@@ -220,6 +220,27 @@ impl TypeChecker {
 
     fn check_expr(&mut self, expression: &mut Expr) -> Result<Type, String> {
         let call_token = expression.token.clone();
+        if let ExprKind::Member { object, name, .. } = &expression.kind {
+            if let Some(enum_path) = qualified_expression_name(object) {
+                let resolved = self.resolve_name(&enum_path);
+                if let Some(enumeration) = self.enums.get(&resolved).cloned() {
+                    let Some(variant) = enumeration.variants.get(name) else {
+                        return Err(diagnostic(
+                            &expression.token,
+                            format!("enum {:?} has no variant {name:?}", enumeration.name),
+                        ));
+                    };
+                    expression.kind = ExprKind::EnumValue {
+                        enum_id: enumeration.id,
+                        enum_name: enumeration.name,
+                        variant_name: variant.name.clone(),
+                        value: variant.value,
+                    };
+                    expression.ty = Some(Type::Enum(enumeration.id));
+                    return Ok(Type::Enum(enumeration.id));
+                }
+            }
+        }
         if self.check_class_constructor_call(expression)? {
             return Ok(expression.ty.unwrap());
         }
@@ -323,6 +344,7 @@ impl TypeChecker {
             }
             ExprKind::Boolean(_) => Type::Bool,
             ExprKind::Text(_) => Type::Text,
+            ExprKind::EnumValue { enum_id, .. } => Type::Enum(*enum_id),
             ExprKind::ObjectInit { class_id, .. } => Type::Class(*class_id),
             ExprKind::ScratchListInit => Type::ScratchList,
             ExprKind::Name { value, symbol } => {
@@ -422,8 +444,8 @@ impl TypeChecker {
                             &argument.token,
                             format!(
                                 "cannot pass {} to {} parameter {:?} of function {resolved_name:?}",
-                                actual.name(),
-                                parameter.ty.name(),
+                                self.readable_type_name(actual),
+                                self.readable_type_name(parameter.ty),
                                 parameter.name
                             ),
                         ));

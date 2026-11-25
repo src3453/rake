@@ -6,6 +6,7 @@ struct TypeChecker {
     next_id: usize,
     functions: HashMap<String, FunctionInfo>,
     classes: HashMap<String, ClassInfo>,
+    enums: HashMap<String, EnumInfo>,
     objects: HashMap<String, ObjectInstance>,
     namespaces: std::collections::HashSet<String>,
     imports: HashMap<String, HashMap<String, String>>,
@@ -25,6 +26,7 @@ impl TypeChecker {
             next_id: 0,
             functions: HashMap::new(),
             classes: HashMap::new(),
+            enums: HashMap::new(),
             objects: HashMap::new(),
             namespaces: std::collections::HashSet::new(),
             imports: HashMap::new(),
@@ -39,6 +41,7 @@ impl TypeChecker {
         self.reserve_source_names(statements);
         self.collect_namespace_paths(statements)?;
         self.collect_imports(statements)?;
+        self.register_enums(statements)?;
         self.register_classes(statements)?;
         self.register_functions(statements)?;
         self.validate_imports(statements)?;

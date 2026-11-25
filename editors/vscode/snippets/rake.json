@@ -1,4 +1,9 @@
 {
+  "Macro declaration": {
+    "prefix": "macro",
+    "body": ["macro! ${1:name} (${2:argument}) {", "    $0", "}"],
+    "description": "Declare a token substitution macro"
+  },
   "Variable declaration": {
     "prefix": "var",
     "body": "var ${1:name}: ${2:int} = ${3:0}",
@@ -64,6 +69,16 @@
       "}"
     ],
     "description": "Declare a class with public fields"
+  },
+  "Enum declaration": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "    ${2:First},",
+      "    ${3:Second},",
+      "}"
+    ],
+    "description": "Declare a compile-time enum"
   },
   "Method declaration": {
     "prefix": "method",

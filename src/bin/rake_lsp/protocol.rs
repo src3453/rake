@@ -7,6 +7,7 @@ const TOKEN_TYPES: &[&str] = &[
     "function",
     "namespace",
     "string",
+    "enumMember",
 ];
 const TOKEN_MODIFIERS: &[&str] = &["declaration", "definition", "readonly", "modification"];
 

@@ -570,6 +570,118 @@ fn declared_class_paths(tokens: &[SourceToken]) -> Vec<String> {
         .collect()
 }
 
+fn declared_enum_paths(tokens: &[SourceToken]) -> Vec<String> {
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            if token.text != "enum" {
+                return None;
+            }
+            let enum_name = tokens.get(index + 1)?;
+            if enum_name.kind != SourceTokenKind::Identifier {
+                return None;
+            }
+            let namespace = namespace_at_index(tokens, index);
+            Some(if namespace.is_empty() {
+                enum_name.text.clone()
+            } else {
+                format!("{namespace}.{}", enum_name.text)
+            })
+        })
+        .collect()
+}
+
+fn enum_body_range(tokens: &[SourceToken], enum_index: usize) -> Option<(usize, usize)> {
+    let open = (enum_index + 2..tokens.len()).find(|index| tokens[*index].text == "{")?;
+    let mut depth = 1usize;
+    for index in open + 1..tokens.len() {
+        match tokens[index].text.as_str() {
+            "{" => depth += 1,
+            "}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn enum_variants_for_receiver(tokens: &[SourceToken], receiver: &str) -> Vec<(String, usize)> {
+    let canonical = source_imported_names(tokens)
+        .into_iter()
+        .find_map(|(local, canonical)| (local == receiver).then_some(canonical))
+        .or_else(|| resolved_namespace_alias(tokens, receiver))
+        .unwrap_or_else(|| receiver.to_string());
+    let paths = declared_enum_paths(tokens);
+    let matching = paths
+        .iter()
+        .filter(|path| {
+            path.as_str() == canonical
+                || (!canonical.contains('.') && path.rsplit('.').next() == Some(canonical.as_str()))
+        })
+        .collect::<Vec<_>>();
+    if matching.len() != 1 {
+        return Vec::new();
+    }
+    let target = matching[0];
+    let Some(enum_index) = tokens.iter().enumerate().find_map(|(index, token)| {
+        if token.text != "enum" || tokens.get(index + 1).map(|part| part.kind) != Some(SourceTokenKind::Identifier) {
+            return None;
+        }
+        let namespace = namespace_at_index(tokens, index);
+        let name = if namespace.is_empty() {
+            tokens[index + 1].text.clone()
+        } else {
+            format!("{namespace}.{}", tokens[index + 1].text)
+        };
+        (&name == target).then_some(index)
+    }) else {
+        return Vec::new();
+    };
+    let Some((open, close)) = enum_body_range(tokens, enum_index) else {
+        return Vec::new();
+    };
+    tokens[open + 1..close]
+        .iter()
+        .filter(|token| token.kind == SourceTokenKind::Identifier)
+        .enumerate()
+        .map(|(index, token)| (token.text.clone(), index))
+        .collect()
+}
+
+fn enum_type_at(tokens: &[SourceToken], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else { return false };
+    if token.kind != SourceTokenKind::Identifier {
+        return false;
+    }
+    let mut start = index;
+    while start >= 2
+        && tokens[start - 1].text == "."
+        && tokens[start - 2].kind == SourceTokenKind::Identifier
+    {
+        start -= 2;
+    }
+    if start == 0 || !matches!(tokens[start - 1].text.as_str(), ":" | "->") {
+        return false;
+    }
+    let path = tokens[start..=index]
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    let enums = declared_enum_paths(tokens);
+    enums.iter().any(|enum_name| enum_name == &path)
+        || enums
+            .iter()
+            .filter(|enum_name| enum_name.rsplit('.').next() == Some(token.text.as_str()))
+            .count()
+            == 1
+}
+
 fn class_type_at(tokens: &[SourceToken], index: usize) -> bool {
     let Some(token) = tokens.get(index) else { return false };
     if token.kind != SourceTokenKind::Identifier {

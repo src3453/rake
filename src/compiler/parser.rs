@@ -82,6 +82,12 @@ enum ExprKind {
         info: Option<FunctionInfo>,
         builtin: Option<BuiltinBlock>,
     },
+    EnumValue {
+        enum_id: u32,
+        enum_name: String,
+        variant_name: String,
+        value: i64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +114,12 @@ enum Stmt {
         name_token: Token,
         path: String,
         body: Vec<Stmt>,
+    },
+    Enum {
+        name_token: Token,
+        name: String,
+        id: u32,
+        variants: Vec<EnumVariantInfo>,
     },
     Class {
         name_token: Token,
@@ -196,6 +208,183 @@ struct Parser {
     type_aliases: HashMap<String, Type>,
     class_ids: HashMap<String, u32>,
     next_class_id: u32,
+    enum_ids: HashMap<String, u32>,
+    next_enum_id: u32,
+    namespace_aliases: HashMap<String, String>,
+}
+
+/// Expand the initial C-style token macros before parsing. Macro bodies are
+/// token sequences; parameters are substituted without interpreting strings.
+pub(crate) fn expand_macros(tokens: Vec<Token>) -> Result<Vec<Token>, String> {
+    use std::collections::HashMap;
+    type Macro = (Token, Vec<String>, Vec<Token>);
+    let mut macros: HashMap<String, Macro> = HashMap::new();
+    let mut source = Vec::new();
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if tokens[i].text == "macro" && tokens[i + 1].text == "!" {
+            let start = tokens[i].clone();
+            i += 2;
+            let name_token = tokens
+                .get(i)
+                .ok_or_else(|| diagnostic(&start, "expected macro name"))?;
+            if name_token.kind != TokenKind::Identifier {
+                return Err(diagnostic(name_token, "expected macro name"));
+            }
+            let name = name_token.text.clone();
+            if macros.contains_key(&name) {
+                return Err(diagnostic(
+                    name_token,
+                    format!("macro '{name}' is already defined"),
+                ));
+            }
+            i += 1;
+            if tokens.get(i).map(|t| t.text.as_str()) != Some("(") {
+                return Err(diagnostic(&start, "expected '(' after macro name"));
+            }
+            i += 1;
+            let mut params = Vec::new();
+            while tokens.get(i).map(|t| t.text.as_str()) != Some(")") {
+                let t = tokens
+                    .get(i)
+                    .ok_or_else(|| diagnostic(&start, "unterminated macro parameters"))?;
+                if t.kind != TokenKind::Identifier {
+                    return Err(diagnostic(t, "expected macro parameter"));
+                }
+                if params.contains(&t.text) {
+                    return Err(diagnostic(
+                        t,
+                        format!("duplicate macro parameter '{}'", t.text),
+                    ));
+                }
+                params.push(t.text.clone());
+                i += 1;
+                if tokens.get(i).map(|t| t.text.as_str()) == Some(",") {
+                    i += 1;
+                } else if tokens.get(i).map(|t| t.text.as_str()) != Some(")") {
+                    return Err(diagnostic(
+                        &tokens[i],
+                        "expected ',' or ')' in macro parameters",
+                    ));
+                }
+            }
+            i += 1;
+            if tokens.get(i).map(|t| t.text.as_str()) != Some("{") {
+                return Err(diagnostic(&start, "expected '{' before macro body"));
+            }
+            i += 1;
+            let body_start = i;
+            let mut depth = 1;
+            while i < tokens.len() && depth > 0 {
+                if tokens[i].text == "{" {
+                    depth += 1;
+                } else if tokens[i].text == "}" {
+                    depth -= 1;
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return Err(diagnostic(&start, "unterminated macro body"));
+            }
+            macros.insert(name, (start, params, tokens[body_start..i - 1].to_vec()));
+        } else {
+            source.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+    if i < tokens.len() {
+        source.push(tokens[i].clone());
+    }
+    fn expand(
+        input: Vec<Token>,
+        macros: &HashMap<String, Macro>,
+        depth: usize,
+    ) -> Result<Vec<Token>, String> {
+        if depth > 64 {
+            return Err("macro expansion exceeded 64 levels".into());
+        }
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < input.len() {
+            if i + 2 < input.len()
+                && input[i].kind == TokenKind::Identifier
+                && input[i + 1].text == "!"
+                && input[i + 2].text == "("
+            {
+                if let Some((_definition, params, body)) = macros.get(&input[i].text) {
+                    let call = input[i].clone();
+                    i += 3;
+                    let mut args: Vec<Vec<Token>> = vec![Vec::new()];
+                    let mut parens = 0;
+                    let mut braces = 0;
+                    let mut brackets = 0;
+                    while i < input.len() {
+                        let t = &input[i];
+                        if t.text == ")" && parens == 0 && braces == 0 && brackets == 0 {
+                            break;
+                        }
+                        if t.text == "," && parens == 0 && braces == 0 && brackets == 0 {
+                            args.push(Vec::new());
+                        } else {
+                            match t.text.as_str() {
+                                "(" => parens += 1,
+                                ")" => parens -= 1,
+                                "{" => braces += 1,
+                                "}" => braces -= 1,
+                                "[" => brackets += 1,
+                                "]" => brackets -= 1,
+                                _ => {}
+                            }
+                            args.last_mut().unwrap().push(t.clone());
+                        }
+                        i += 1;
+                    }
+                    if i == input.len() {
+                        return Err(diagnostic(&call, "unterminated macro invocation"));
+                    }
+                    i += 1;
+                    if args.len() == 1 && args[0].is_empty() {
+                        args.clear();
+                    }
+                    if args.len() != params.len() {
+                        return Err(diagnostic(
+                            &call,
+                            format!(
+                                "macro expects {} arguments, got {}",
+                                params.len(),
+                                args.len()
+                            ),
+                        ));
+                    }
+                    let map: HashMap<_, _> = params.iter().cloned().zip(args).collect();
+                    let mut substituted = Vec::new();
+                    for token in body {
+                        if token.kind == TokenKind::Identifier {
+                            if let Some(arg) = map.get(&token.text) {
+                                substituted.extend(arg.clone());
+                                continue;
+                            }
+                        }
+                        let mut t = token.clone();
+                        t.line = call.line;
+                        t.column = call.column;
+                        substituted.push(t);
+                    }
+                    let expanded = expand(substituted, macros, depth + 1)?;
+                    out.extend(expanded);
+                    continue;
+                }
+            }
+            out.push(input[i].clone());
+            i += 1;
+        }
+        Ok(out)
+    }
+    let mut expanded = expand(source, &macros, 0)?;
+    if let Some(eof) = tokens.last().filter(|t| t.kind == TokenKind::Eof) {
+        expanded.push(eof.clone());
+    }
+    Ok(expanded)
 }
 
 impl Parser {
@@ -207,6 +396,9 @@ impl Parser {
             type_aliases: HashMap::new(),
             class_ids: HashMap::new(),
             next_class_id: 0,
+            enum_ids: HashMap::new(),
+            next_enum_id: 0,
+            namespace_aliases: HashMap::new(),
         }
     }
     fn current(&self) -> &Token {
@@ -259,6 +451,21 @@ impl Parser {
             if let Some(class_id) = self.class_ids.get(&candidate) {
                 return Ok(Type::Class(*class_id));
             }
+            if let Some(enum_id) = self.enum_ids.get(&candidate) {
+                return Ok(Type::Enum(*enum_id));
+            }
+            if let Some((alias, suffix)) = path.split_once('.') {
+                let alias_key = format!("{prefix}::{alias}");
+                if let Some(namespace) = self.namespace_aliases.get(&alias_key) {
+                    let target = format!("{namespace}.{suffix}");
+                    if let Some(class_id) = self.class_ids.get(&target) {
+                        return Ok(Type::Class(*class_id));
+                    }
+                    if let Some(enum_id) = self.enum_ids.get(&target) {
+                        return Ok(Type::Enum(*enum_id));
+                    }
+                }
+            }
             if scope.pop().is_none() {
                 break;
             }
@@ -307,6 +514,8 @@ impl Parser {
                 statements.push(self.namespace_declaration()?);
             } else if self.at("class") {
                 statements.push(self.class_declaration()?);
+            } else if self.at("enum") {
+                statements.push(self.enum_declaration()?);
             } else if self.function_declaration_starts_here() {
                 statements.push(self.function_declaration()?);
             } else if self.at("event") {
@@ -398,6 +607,22 @@ impl Parser {
                     .clone()
                     .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
                 self.type_aliases.insert(format!("{scope}::{local}"), ty);
+            } else if let Some(class_id) = self.class_ids.get(&path) {
+                let local = alias
+                    .clone()
+                    .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
+                self.type_aliases
+                    .insert(format!("{scope}::{local}"), Type::Class(*class_id));
+            } else if let Some(enum_id) = self.enum_ids.get(&path) {
+                let local = alias
+                    .clone()
+                    .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
+                self.type_aliases
+                    .insert(format!("{scope}::{local}"), Type::Enum(*enum_id));
+            }
+            if let Some(alias) = &alias {
+                self.namespace_aliases
+                    .insert(format!("{scope}::{alias}"), path.clone());
             }
         } else {
             for (_, member) in &members {
@@ -408,6 +633,20 @@ impl Parser {
                         .map(|alias| format!("{alias}.{member}"))
                         .unwrap_or_else(|| member.clone());
                     self.type_aliases.insert(format!("{scope}::{local}"), ty);
+                } else if let Some(class_id) = self.class_ids.get(&target) {
+                    let local = alias
+                        .as_ref()
+                        .map(|alias| format!("{alias}.{member}"))
+                        .unwrap_or_else(|| member.clone());
+                    self.type_aliases
+                        .insert(format!("{scope}::{local}"), Type::Class(*class_id));
+                } else if let Some(enum_id) = self.enum_ids.get(&target) {
+                    let local = alias
+                        .as_ref()
+                        .map(|alias| format!("{alias}.{member}"))
+                        .unwrap_or_else(|| member.clone());
+                    self.type_aliases
+                        .insert(format!("{scope}::{local}"), Type::Enum(*enum_id));
                 }
             }
         }
@@ -444,6 +683,8 @@ impl Parser {
                 body.push(self.namespace_declaration()?);
             } else if self.at("class") {
                 body.push(self.class_declaration()?);
+            } else if self.at("enum") {
+                body.push(self.enum_declaration()?);
             } else if self.function_declaration_starts_here() {
                 body.push(self.function_declaration()?);
             } else if self.at("event") {
@@ -455,7 +696,7 @@ impl Parser {
                 self.namespace.pop();
                 return Err(diagnostic(
                     self.current(),
-                    "namespace bodies may contain only use, namespace, class, and function declarations",
+                    "namespace bodies may contain only use, namespace, class, enum, and function declarations",
                 ));
             }
             self.semicolons();
@@ -548,6 +789,47 @@ impl Parser {
             name,
             fields,
             methods,
+        })
+    }
+
+    fn enum_declaration(&mut self) -> Result<Stmt, String> {
+        self.expect("enum")?;
+        let name_token = self.expect_identifier()?;
+        let name = self.qualified_name(&name_token.text);
+        let id = self.next_enum_id;
+        self.next_enum_id += 1;
+        self.enum_ids.insert(name.clone(), id);
+        self.expect("{")?;
+        let mut variants = Vec::new();
+        if !self.at("}") {
+            loop {
+                let token = self.expect_identifier()?;
+                variants.push(EnumVariantInfo {
+                    name: token.text.clone(),
+                    token,
+                    value: variants.len() as i64,
+                });
+                if !self.at(",") {
+                    break;
+                }
+                self.take();
+                if self.at("}") {
+                    break;
+                }
+            }
+        }
+        self.expect("}")?;
+        if variants.is_empty() {
+            return Err(diagnostic(
+                &name_token,
+                "an enum must declare at least one variant",
+            ));
+        }
+        Ok(Stmt::Enum {
+            name_token,
+            name,
+            id,
+            variants,
         })
     }
 

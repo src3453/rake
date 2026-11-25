@@ -2,7 +2,41 @@ fn symbol_occurrences(document: &Document) -> Vec<SymbolOccurrence> {
     analyze_symbols(&document.text).unwrap_or_default()
 }
 
+fn macro_token_at(document: &Document, position: Position) -> Option<SourceToken> {
+    source_tokens(&document.text)
+        .ok()?
+        .into_iter()
+        .find(|token| {
+            token.kind == SourceTokenKind::Identifier
+                && token.line == position.line
+                && position.character >= token.start_character
+                && position.character < token.start_character + token.length
+        })
+}
+
+fn macro_declaration(document: &Document, name: &str) -> Option<SourceToken> {
+    let tokens = source_tokens(&document.text).ok()?;
+    (0..tokens.len().saturating_sub(2))
+        .find(|&index| {
+            tokens[index].text == "macro"
+                && tokens[index + 1].text == "!"
+                && tokens[index + 2].text == name
+        })
+        .map(|index| tokens[index + 2].clone())
+}
+
 fn definition_result(uri: &str, document: &Document, position: Position) -> Value {
+    if let Some(token) = macro_token_at(document, position) {
+        if let Some(declaration) = macro_declaration(document, &token.text) {
+            return json!({
+                "uri": uri,
+                "range": {
+                    "start": {"line": declaration.line, "character": declaration.start_character},
+                    "end": {"line": declaration.line, "character": declaration.start_character + declaration.length}
+                }
+            });
+        }
+    }
     let occurrences = symbol_occurrences(document);
     let Some(selected) = occurrence_at(&occurrences, position) else {
         return Value::Null;
@@ -38,6 +72,18 @@ fn references_result(
 
 fn hover_result(document: &Document, position: Position) -> Value {
     let tokens = source_tokens(&document.text).unwrap_or_default();
+    if let Some(token) = macro_token_at(document, position) {
+        if macro_declaration(document, &token.text).is_some() {
+            let signature = format!("macro! {}(...)", token.text);
+            return json!({
+                "contents": {"kind": "markdown", "value": format!("```rake\n{signature}\n```\n\nToken substitution macro, expanded before parsing and type checking.")},
+                "range": {
+                    "start": {"line": token.line, "character": token.start_character},
+                    "end": {"line": token.line, "character": token.start_character + token.length}
+                }
+            });
+        }
+    }
     let analyzed_occurrences = analyze_symbols(&document.text).unwrap_or_default();
     if let Some((index, token)) = tokens.iter().enumerate().find(|(_, token)| {
         token.line == position.line
@@ -138,6 +184,13 @@ fn hover_result(document: &Document, position: Position) -> Value {
         )
     } else if occurrence.class_symbol {
         (format!("class {}", occurrence.name), "Class declaration.")
+    } else if occurrence.enum_variant {
+        (
+            occurrence.ty.clone(),
+            "Enum variant. Its tag is resolved at compile time.",
+        )
+    } else if occurrence.enum_symbol {
+        (occurrence.ty.clone(), "Enum declaration or type reference.")
     } else if occurrence.scratch_list {
         (
             format!("var {}: Scratch.Generics.List", occurrence.name),
@@ -199,7 +252,7 @@ fn document_symbols(document: &Document) -> Value {
             json!({
                 "name": occurrence.name,
                 "detail": occurrence.ty,
-                "kind": if occurrence.event_handler { 24 } else if occurrence.namespace_symbol { 3 } else if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter || occurrence.scratch_list { 13 } else { 14 },
+                "kind": if occurrence.enum_variant { 22 } else if occurrence.enum_symbol { 10 } else if occurrence.event_handler { 24 } else if occurrence.namespace_symbol { 3 } else if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter || occurrence.scratch_list { 13 } else { 14 },
                 "range": range,
                 "selectionRange": range
             })
@@ -220,6 +273,7 @@ fn valid_identifier(name: &str) -> bool {
             "var"
                 | "const"
                 | "class"
+                | "enum"
                 | "public"
                 | "private"
                 | "self"

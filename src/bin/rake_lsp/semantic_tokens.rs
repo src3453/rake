@@ -39,12 +39,17 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             SourceTokenKind::Identifier if class_type_at(&tokens, token_index) => {
                 Some(types["type"])
             }
+            SourceTokenKind::Identifier if enum_type_at(&tokens, token_index) => {
+                Some(types["type"])
+            }
             SourceTokenKind::Identifier
                 if matches!(
                     token.text.as_str(),
                     "var"
                         | "const"
                         | "class"
+                        | "enum"
+                        | "macro"
                         | "public"
                         | "private"
                         | "self"
@@ -78,6 +83,18 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                 Some(types["namespace"])
             }
             SourceTokenKind::Identifier
+                if token_index > 1
+                    && tokens[token_index - 1].text == "!"
+                    && tokens[token_index - 2].text == "macro" =>
+            {
+                Some(types["function"])
+            }
+            SourceTokenKind::Identifier
+                if tokens.get(token_index + 1).is_some_and(|next| next.text == "!") =>
+            {
+                Some(types["function"])
+            }
+            SourceTokenKind::Identifier
                 if builtin_name_at(&tokens, token_index).is_some()
                     || scratch_list_method_name_at(&tokens, token_index, &occurrences)
                         .is_some()
@@ -92,6 +109,22 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                 if occurrence_by_position
                     .get(&(token.line, token.start_character))
                     .map(|occurrence| occurrence.class_symbol)
+                    .unwrap_or(false) =>
+            {
+                Some(types["type"])
+            }
+            SourceTokenKind::Identifier
+                if occurrence_by_position
+                    .get(&(token.line, token.start_character))
+                    .map(|occurrence| occurrence.enum_variant)
+                    .unwrap_or(false) =>
+            {
+                Some(types["enumMember"])
+            }
+            SourceTokenKind::Identifier
+                if occurrence_by_position
+                    .get(&(token.line, token.start_character))
+                    .map(|occurrence| occurrence.enum_symbol)
                     .unwrap_or(false) =>
             {
                 Some(types["type"])

@@ -5,6 +5,9 @@
     {"include": "#generic-types"},
     {"include": "#namespaces"},
     {"include": "#events"},
+    {"include": "#enum-declarations"},
+    {"include": "#enum-types"},
+    {"include": "#macros"},
     {"include": "#functions"},
     {"include": "#keywords"},
     {"include": "#types"},
@@ -15,6 +18,12 @@
     {"include": "#punctuation"}
   ],
   "repository": {
+    "macros": {
+      "patterns": [
+        {"name": "meta.macro.declaration.rake", "match": "\\b(macro)(\\s*!\\s*)([A-Za-z_][A-Za-z0-9_]*)", "captures": {"1": {"name": "keyword.control.macro.rake"}, "3": {"name": "entity.name.function.macro.rake"}}},
+        {"name": "entity.name.function.macro.rake", "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*!\\s*\\()"}
+      ]
+    },
     "namespaces": {
       "patterns": [
         {"name": "keyword.control.namespace.rake", "match": "\\b(ns|use|as)\\b"},
@@ -32,6 +41,31 @@
         {"name": "entity.name.function.rake", "match": "\\b[A-Za-z_]\\w*(?=\\s*\\()"}
       ]
     },
+    "enum-declarations": {
+      "patterns": [
+        {
+          "name": "meta.enum.rake",
+          "begin": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+          "beginCaptures": {
+            "1": {"name": "keyword.control.rake"},
+            "2": {"name": "entity.name.type.enum.rake"},
+            "3": {"name": "punctuation.section.block.begin.rake"}
+          },
+          "end": "\\}",
+          "endCaptures": {"0": {"name": "punctuation.section.block.end.rake"}},
+          "patterns": [
+            {"include": "#comments"},
+            {"include": "#punctuation"},
+            {"name": "variable.other.enummember.rake", "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"}
+          ]
+        }
+      ]
+    },
+    "enum-types": {
+      "patterns": [
+        {"name": "storage.type.enum.rake", "match": "\\b[A-Z][A-Za-z0-9_]*\\b"}
+      ]
+    },
     "comments": {
       "patterns": [
         {"name": "comment.line.double-slash.rake", "match": "//.*$"}
@@ -41,7 +75,7 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|class|public|private|fn|warp|event|send|if|else|while|return|self)\\b"
+          "match": "\\b(var|const|class|enum|public|private|fn|warp|event|send|if|else|while|return|self)\\b"
         }
       ]
     },

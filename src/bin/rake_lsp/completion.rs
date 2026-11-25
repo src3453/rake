@@ -53,6 +53,25 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let type_context = is_type_context(&tokens, position, &prefix);
     let member_receiver = member_receiver_at(&tokens, position, &prefix);
 
+    if let Some(receiver) = qualified_receiver_at(&tokens, position, &prefix) {
+        let variants = enum_variants_for_receiver(&tokens, &receiver);
+        if !variants.is_empty() {
+            return variants
+                .into_iter()
+                .filter(|(name, _)| name.starts_with(&prefix))
+                .map(|(name, tag)| {
+                    json!({
+                        "label": name,
+                        "kind": 20,
+                        "detail": format!("Enum variant (compile-time tag {tag})"),
+                        "insertText": name,
+                        "sortText": format!("0-{name}")
+                    })
+                })
+                .collect();
+        }
+    }
+
     if let Some(namespace) = event_member_namespace_at(&tokens, position, &prefix) {
         let resolved_namespace =
             resolved_namespace_alias(&tokens, &namespace).unwrap_or_else(|| namespace.clone());
@@ -276,6 +295,50 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     }
 
     let mut items = Vec::new();
+    if !type_context && member_receiver.is_none() {
+        for index in 0..tokens.len().saturating_sub(2) {
+            if tokens[index].text != "macro" || tokens[index + 1].text != "!" {
+                continue;
+            }
+            let Some(name) = tokens
+                .get(index + 2)
+                .filter(|token| token.kind == SourceTokenKind::Identifier)
+            else {
+                continue;
+            };
+            if !name.text.starts_with(&prefix) {
+                continue;
+            }
+            let mut parameters = Vec::new();
+            let mut cursor = index + 3;
+            if tokens.get(cursor).map(|token| token.text.as_str()) == Some("(") {
+                cursor += 1;
+                while let Some(token) = tokens.get(cursor) {
+                    if token.text == ")" {
+                        break;
+                    }
+                    if token.kind == SourceTokenKind::Identifier {
+                        parameters.push(token.text.clone());
+                    }
+                    cursor += 1;
+                }
+            }
+            let args = parameters
+                .iter()
+                .enumerate()
+                .map(|(n, value)| format!("${{{}:{value}}}", n + 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            items.push(json!({
+                "label": name.text,
+                "kind": 3,
+                "detail": format!("macro! {}({})", name.text, parameters.join(", ")),
+                "insertText": format!("{}!({args})", name.text),
+                "insertTextFormat": 2,
+                "sortText": format!("0-{}", name.text)
+            }));
+        }
+    }
     let candidates: &[(&str, u32, &str)] = if type_context {
         &[
             ("int", 7, "Integer type"),
@@ -292,13 +355,19 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("var", 14, "Mutable variable declaration"),
             ("const", 14, "Constant declaration"),
             ("class", 14, "Class declaration"),
+            ("enum", 14, "Compile-time enumeration declaration"),
+            ("macro", 14, "Token substitution macro declaration"),
             ("public", 14, "Public class member"),
             ("private", 14, "Private class member"),
             ("if", 14, "Conditional statement"),
             ("else", 14, "Alternative branch"),
             ("while", 14, "Loop statement"),
             ("fn", 14, "Function declaration"),
-            ("warp", 14, "Declare a function that runs without screen refresh"),
+            (
+                "warp",
+                14,
+                "Declare a function that runs without screen refresh",
+            ),
             ("ns", 14, "Namespace declaration"),
             ("use", 14, "Import a namespace or declaration"),
             ("event", 14, "Declare a Scratch event handler"),
@@ -321,10 +390,14 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                     "send ${1:message}"
                 } else if label == "warp" {
                     "warp fn ${1:name}() {\n\t$0\n}"
+                } else if label == "enum" {
+                    "enum ${1:Name} {\n\t${2:First},\n\t${3:Second},\n}"
+                } else if label == "macro" {
+                    "macro! ${1:name} (${2:argument}) {\n\t$0\n}"
                 } else {
                     label
                 },
-                "insertTextFormat": if label == "event" || label == "send" || label == "warp" { 2 } else { 1 },
+                "insertTextFormat": if label == "event" || label == "send" || label == "warp" || label == "enum" || label == "macro" { 2 } else { 1 },
                 "sortText": format!("0-{label}")
             }));
         }
@@ -339,6 +412,33 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                     "detail": "Class type",
                     "insertText": class_name,
                     "sortText": format!("0-{class_name}")
+                }));
+            }
+        }
+        for enum_path in declared_enum_paths(&tokens) {
+            let enum_name = enum_path.rsplit('.').next().unwrap_or(&enum_path);
+            if enum_name.starts_with(&prefix) {
+                items.push(json!({
+                    "label": enum_name,
+                    "kind": 13,
+                    "detail": format!("Enum type: {enum_path}"),
+                    "insertText": enum_name,
+                    "sortText": format!("0-{enum_name}")
+                }));
+            }
+        }
+        for (local, target) in source_imported_names(&tokens) {
+            if local.starts_with(&prefix)
+                && declared_enum_paths(&tokens)
+                    .iter()
+                    .any(|path| path == &target)
+            {
+                items.push(json!({
+                    "label": local,
+                    "kind": 13,
+                    "detail": format!("Enum type: {target}"),
+                    "insertText": local,
+                    "sortText": format!("0-{local}")
                 }));
             }
         }
@@ -382,7 +482,8 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             instance_class_name(&tokens, receiver)
         };
         if let Some(class_name) = class_name {
-            let allow_private = class_at_position(&tokens, position).as_deref() == Some(class_name.as_str());
+            let allow_private =
+                class_at_position(&tokens, position).as_deref() == Some(class_name.as_str());
             for (name, ty, mutable, private) in class_fields(&tokens, &class_name) {
                 if private && !allow_private {
                     continue;
@@ -537,14 +638,22 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             }
             items.push(json!({
                 "label": occurrence.name,
-                "kind": if occurrence.class_symbol {
+                "kind": if occurrence.enum_variant {
+                    20
+                } else if occurrence.enum_symbol {
+                    13
+                } else if occurrence.class_symbol {
                     7
                 } else if occurrence.mutable || occurrence.parameter {
                     6
                 } else {
                     21
                 },
-                "detail": if occurrence.class_symbol {
+                "detail": if occurrence.enum_variant {
+                    occurrence.ty.clone()
+                } else if occurrence.enum_symbol {
+                    occurrence.ty.clone()
+                } else if occurrence.class_symbol {
                     "class declaration".to_string()
                 } else if occurrence.scratch_list {
                     "Scratch.Generics.List handle".to_string()

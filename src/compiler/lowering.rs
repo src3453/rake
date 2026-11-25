@@ -63,7 +63,7 @@ fn lower_statement_list(
     for mut statement in source_statements {
         let mut before = Vec::new();
         match &mut statement {
-            Stmt::Use { .. } | Stmt::Class { .. } | Stmt::Send { .. } => {}
+            Stmt::Use { .. } | Stmt::Class { .. } | Stmt::Enum { .. } | Stmt::Send { .. } => {}
             Stmt::Namespace { body, .. } => {
                 lower_statement_list(body, symbols, allocator)?;
             }
@@ -192,6 +192,7 @@ fn lower_expression(
         | ExprKind::Boolean(_)
         | ExprKind::Text(_)
         | ExprKind::ScratchListInit
+        | ExprKind::EnumValue { .. }
         | ExprKind::Name { .. } => {}
     }
     Ok(())

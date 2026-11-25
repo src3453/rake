@@ -22,6 +22,9 @@ fn symbol_occurrence(
         event_handler: false,
         event_message: false,
         class_symbol: false,
+        enum_symbol: false,
+        enum_variant: false,
+        enum_type_id: match symbol.ty { Type::Enum(id) => Some(id), _ => None },
         namespace_symbol: false,
         scratch_list: symbol.ty == Type::ScratchList,
         private_member: symbol.visibility == Visibility::Private,
@@ -93,6 +96,9 @@ fn event_symbol_occurrence(
         event_handler: true,
         event_message,
         class_symbol: false,
+        enum_symbol: false,
+        enum_variant: false,
+        enum_type_id: None,
         namespace_symbol: false,
         scratch_list: false,
         private_member: false,
@@ -126,6 +132,9 @@ fn message_reference_occurrence(
         event_handler: true,
         event_message: true,
         class_symbol: false,
+        enum_symbol: false,
+        enum_variant: false,
+        enum_type_id: None,
         namespace_symbol: false,
         scratch_list: false,
         private_member: false,
@@ -173,6 +182,73 @@ fn class_symbol_occurrence(
     occurrence
 }
 
+fn enum_symbol_occurrence(
+    source: &str,
+    token: &Token,
+    name: &str,
+    enum_id: u32,
+    declaration: bool,
+) -> SymbolOccurrence {
+    let symbol = Symbol {
+        source_name: name.to_string(),
+        scratch_name: name.to_string(),
+        ty: Type::Enum(enum_id),
+        mutable: false,
+        visibility: Visibility::Public,
+        id: format!("enum:{name}"),
+        semantic_id: format!("enum:{name}"),
+        argument_id: None,
+        storage: StorageClass::ObjectBinding,
+        initial_value: Value::Null,
+    };
+    let mut occurrence = symbol_occurrence(source, token, &symbol, declaration, false);
+    occurrence.name = name.rsplit('.').next().unwrap_or(name).to_string();
+    occurrence.ty = format!("enum {name}");
+    occurrence.enum_symbol = true;
+    occurrence.enum_type_id = Some(enum_id);
+    occurrence
+}
+
+fn enum_variant_occurrence(
+    source: &str,
+    token: &Token,
+    enum_name: &str,
+    enum_id: u32,
+    variant_name: &str,
+    value: i64,
+    declaration: bool,
+) -> SymbolOccurrence {
+    let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
+    let character = line_text
+        .trim_end_matches('\r')
+        .chars()
+        .take(token.column - 1)
+        .map(char::len_utf16)
+        .sum::<usize>() as u32;
+    SymbolOccurrence {
+        symbol_id: format!("enum:{enum_name}:variant:{variant_name}"),
+        name: variant_name.to_string(),
+        ty: format!("{enum_name}::{variant_name} = {value}"),
+        mutable: false,
+        parameter: false,
+        function: false,
+        event_handler: false,
+        event_message: false,
+        class_symbol: false,
+        enum_symbol: false,
+        enum_variant: true,
+        enum_type_id: Some(enum_id),
+        namespace_symbol: false,
+        scratch_list: false,
+        private_member: false,
+        line: (token.line - 1) as u32,
+        character,
+        length: token.text.encode_utf16().count() as u32,
+        declaration,
+        modification: false,
+    }
+}
+
 fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> SymbolOccurrence {
     let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
     let character = line_text
@@ -191,6 +267,9 @@ fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> Symbo
         event_handler: false,
         event_message: false,
         class_symbol: false,
+        enum_symbol: false,
+        enum_variant: false,
+        enum_type_id: None,
         namespace_symbol: true,
         scratch_list: false,
         private_member: false,
@@ -225,6 +304,9 @@ fn function_symbol_occurrence(
         event_handler: false,
         event_message: false,
         class_symbol: false,
+        enum_symbol: false,
+        enum_variant: false,
+        enum_type_id: None,
         namespace_symbol: false,
         scratch_list: false,
         private_member: function.visibility == Visibility::Private,
@@ -278,6 +360,17 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
             for argument in arguments {
                 collect_expression_symbols(source, argument, output);
             }
+        }
+        ExprKind::EnumValue { enum_id, enum_name, variant_name, value } => {
+            output.push(enum_variant_occurrence(
+                source,
+                &expression.token,
+                enum_name,
+                *enum_id,
+                variant_name,
+                *value,
+                false,
+            ));
         }
         ExprKind::Member {
             symbol: Some(symbol),
@@ -339,6 +432,20 @@ fn collect_statement_symbols(
             } => {
                 output.push(namespace_symbol_occurrence(source, name_token, path));
                 collect_statement_symbols(source, body, output);
+            }
+            Stmt::Enum { name_token, name, id, variants } => {
+                output.push(enum_symbol_occurrence(source, name_token, name, *id, true));
+                for variant in variants {
+                    output.push(enum_variant_occurrence(
+                        source,
+                        &variant.token,
+                        name,
+                        *id,
+                        &variant.name,
+                        variant.value,
+                        true,
+                    ));
+                }
             }
             Stmt::Class {
                 name_token,
@@ -522,6 +629,60 @@ fn collect_statement_symbols(
     }
 }
 
+fn imported_type_path(tokens: &[SourceToken], path: &str) -> Option<String> {
+    for (index, token) in tokens.iter().enumerate() {
+        if token.text != "use" {
+            continue;
+        }
+        let Some(first) = tokens.get(index + 1).filter(|token| token.kind == SourceTokenKind::Identifier) else {
+            continue;
+        };
+        let mut canonical = first.text.clone();
+        let mut cursor = index + 2;
+        let mut members = Vec::new();
+        while tokens.get(cursor).map(|token| token.text.as_str()) == Some(".") {
+            if tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("{") {
+                cursor += 2;
+                while let Some(member) = tokens.get(cursor) {
+                    if member.text == "}" {
+                        cursor += 1;
+                        break;
+                    }
+                    if member.kind == SourceTokenKind::Identifier {
+                        members.push(member.text.clone());
+                    }
+                    cursor += 1;
+                }
+                break;
+            }
+            let Some(segment) = tokens.get(cursor + 1).filter(|token| token.kind == SourceTokenKind::Identifier) else {
+                break;
+            };
+            canonical.push('.');
+            canonical.push_str(&segment.text);
+            cursor += 2;
+        }
+        let alias = if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as") {
+            tokens.get(cursor + 1).map(|token| token.text.clone())
+        } else {
+            None
+        };
+        if let Some(alias) = alias {
+            if path == alias {
+                return Some(canonical);
+            }
+            if let Some(suffix) = path.strip_prefix(&format!("{alias}.")) {
+                return Some(format!("{canonical}.{suffix}"));
+            }
+        } else if let Some(member) = members.iter().find(|member| member.as_str() == path) {
+            return Some(format!("{canonical}.{member}"));
+        } else if canonical.rsplit('.').next() == Some(path) {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
 pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
     let mut statements = Parser::new(lex(source)?).parse()?;
     // Keep the bindings resolved before a type error so editor features remain
@@ -539,6 +700,37 @@ pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
             )
         })
         .collect::<Vec<_>>();
+    let enum_names = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.enum_symbol && occurrence.declaration)
+        .filter_map(|occurrence| occurrence.ty.strip_prefix("enum ").map(str::to_string))
+        .collect::<Vec<_>>();
+    let enum_ids_by_name = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.enum_symbol && occurrence.declaration)
+        .filter_map(|occurrence| {
+            Some((
+                occurrence.ty.strip_prefix("enum ")?.to_string(),
+                occurrence.enum_type_id?,
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    for occurrence in &mut occurrences {
+        let Some(enum_id) = occurrence.enum_type_id else { continue };
+        if occurrence.enum_variant {
+            continue;
+        }
+        if let Some(enum_name) = enum_ids_by_name
+            .iter()
+            .find_map(|(name, id)| (*id == enum_id).then_some(name))
+        {
+            occurrence.ty = if occurrence.enum_symbol {
+                format!("enum {enum_name}")
+            } else {
+                enum_name.clone()
+            };
+        }
+    }
     let source_tokens = source_tokens(source)?;
     for (index, token) in source_tokens.iter().enumerate() {
         if token.kind != SourceTokenKind::Identifier {
@@ -561,6 +753,7 @@ pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
             .map(|token| token.text.as_str())
             .collect::<Vec<_>>()
             .join("");
+        let type_path = imported_type_path(&source_tokens, &type_path).unwrap_or(type_path);
         let exact = class_names
             .iter()
             .filter(|(_, qualified)| qualified == &type_path)
@@ -593,6 +786,100 @@ pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
         occurrence.line = token.line;
         occurrence.character = token.start_character;
         occurrence.length = token.length;
+        occurrences.push(occurrence);
+    }
+    for (index, token) in source_tokens.iter().enumerate() {
+        if token.kind != SourceTokenKind::Identifier {
+            continue;
+        }
+        let mut type_start = index;
+        while type_start >= 2
+            && source_tokens[type_start - 1].text == "."
+            && source_tokens[type_start - 2].kind == SourceTokenKind::Identifier
+        {
+            type_start -= 2;
+        }
+        if type_start == 0
+            || !matches!(source_tokens[type_start - 1].text.as_str(), ":" | "->")
+        {
+            continue;
+        }
+        let type_path = source_tokens[type_start..=index]
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        let type_path = imported_type_path(&source_tokens, &type_path).unwrap_or(type_path);
+        let exact = enum_names
+            .iter()
+            .filter(|qualified| *qualified == &type_path)
+            .collect::<Vec<_>>();
+        let matching = if exact.is_empty() {
+            enum_names
+                .iter()
+                .filter(|qualified| qualified.rsplit('.').next() == Some(token.text.as_str()))
+                .collect::<Vec<_>>()
+        } else {
+            exact
+        };
+        if matching.len() != 1 {
+            continue;
+        }
+        let enum_name = matching[0].as_str();
+        let Some(enum_id) = enum_ids_by_name.get(enum_name).copied() else {
+            continue;
+        };
+        let parsed_token = Token::new(
+            TokenKind::Identifier,
+            token.text.clone(),
+            token.line as usize + 1,
+            token.start_character as usize + 1,
+        );
+        let mut occurrence = enum_symbol_occurrence(source, &parsed_token, enum_name, enum_id, false);
+        occurrence.name = token.text.clone();
+        occurrence.line = token.line;
+        occurrence.character = token.start_character;
+        occurrence.length = token.length;
+        occurrences.push(occurrence);
+    }
+    let variant_references = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.enum_variant && !occurrence.declaration)
+        .cloned()
+        .collect::<Vec<_>>();
+    for variant in variant_references {
+        let Some(enum_id) = variant.enum_type_id else {
+            continue;
+        };
+        let Some(enum_name) = enum_ids_by_name
+            .iter()
+            .find_map(|(name, id)| (*id == enum_id).then_some(name.as_str()))
+        else {
+            continue;
+        };
+        let Some(variant_index) = source_tokens.iter().position(|token| {
+            token.line == variant.line && token.start_character == variant.character
+        }) else {
+            continue;
+        };
+        if variant_index < 2 || source_tokens[variant_index - 1].text != "." {
+            continue;
+        }
+        let type_token = &source_tokens[variant_index - 2];
+        if type_token.kind != SourceTokenKind::Identifier {
+            continue;
+        }
+        let parsed_token = Token::new(
+            TokenKind::Identifier,
+            type_token.text.clone(),
+            type_token.line as usize + 1,
+            1,
+        );
+        let mut occurrence = enum_symbol_occurrence(source, &parsed_token, enum_name, enum_id, false);
+        occurrence.name = type_token.text.clone();
+        occurrence.line = type_token.line;
+        occurrence.character = type_token.start_character;
+        occurrence.length = type_token.length;
         occurrences.push(occurrence);
     }
     let mut seen = std::collections::HashSet::new();

@@ -73,7 +73,7 @@ fn compile_source_internal(
     source: &str,
     emit_ir: bool,
 ) -> Result<(Value, Vec<(String, Vec<u8>)>, usize, Option<String>), String> {
-    let tokens = lex(source)?;
+    let tokens = expand_macros(lex(source)?)?;
     let mut statements = Parser::new(tokens).parse()?;
     let mut symbols = TypeChecker::new().check(&mut statements)?;
     lower_function_calls(&mut statements, &mut symbols)?;

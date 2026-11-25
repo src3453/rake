@@ -236,7 +236,7 @@ impl TypeChecker {
 
     fn check_statement(&mut self, statement: &mut Stmt) -> Result<(), String> {
         match statement {
-            Stmt::Use { .. } | Stmt::Namespace { .. } => Ok(()),
+            Stmt::Use { .. } | Stmt::Namespace { .. } | Stmt::Enum { .. } => Ok(()),
             Stmt::Class { .. } => Ok(()),
             Stmt::Function { .. } => Ok(()),
             Stmt::Event {
@@ -277,8 +277,8 @@ impl TypeChecker {
                         &value.token,
                         format!(
                             "cannot return {} from a function returning {}",
-                            value_type.name(),
-                            return_type.name()
+                            self.readable_type_name(value_type),
+                            self.readable_type_name(return_type)
                         ),
                     ));
                 }
@@ -348,8 +348,8 @@ impl TypeChecker {
                             &argument.token,
                             format!(
                                 "cannot pass {} to {} parameter {:?} of function {resolved_name:?}",
-                                actual.name(),
-                                parameter.ty.name(),
+                                self.readable_type_name(actual),
+                                self.readable_type_name(parameter.ty),
                                 parameter.name
                             ),
                         ));
@@ -462,8 +462,8 @@ impl TypeChecker {
                             name_token,
                             format!(
                                 "cannot initialize {} with {}",
-                                annotation.unwrap().name(),
-                                initializer_type.name()
+                                self.readable_type_name(annotation.unwrap()),
+                                self.readable_type_name(initializer_type)
                             ),
                         ));
                     }
@@ -504,7 +504,9 @@ impl TypeChecker {
                     let mut instance_fields = Vec::new();
                     let mut private_fields = std::collections::HashSet::new();
                     for field in &class.fields {
+                        let class_scope = class.name.rsplit_once('.').map(|(scope, _)| scope).unwrap_or("");
                         let (_, initial_value) = constant_field_value(&field.initializer)
+                            .or_else(|| self.enum_variant_constant(&field.initializer, class_scope))
                             .expect("class field defaults validated during registration");
                         let base_name = format!("{name}_{}", field.name);
                         let mut field_scratch_name = base_name.clone();
@@ -581,8 +583,8 @@ impl TypeChecker {
                         &initializer.token,
                         format!(
                             "cannot initialize {} with {}",
-                            declared_type.name(),
-                            initializer_type.name()
+                            self.readable_type_name(declared_type),
+                            self.readable_type_name(initializer_type)
                         ),
                     ));
                 }
@@ -673,8 +675,8 @@ impl TypeChecker {
                         &value.token,
                         format!(
                             "cannot assign {} to {} variable {name:?}",
-                            value_type.name(),
-                            resolved.ty.name()
+                            self.readable_type_name(value_type),
+                            self.readable_type_name(resolved.ty)
                         ),
                     ));
                 }
@@ -742,8 +744,8 @@ impl TypeChecker {
                         &value.token,
                         format!(
                             "cannot assign {} to {} field {:?}",
-                            value_type.name(),
-                            resolved.ty.name(),
+                            self.readable_type_name(value_type),
+                            self.readable_type_name(resolved.ty),
                             field
                         ),
                     ));

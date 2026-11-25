@@ -11,6 +11,7 @@ cargo test
 cargo run --bin rake -- examples/basic.rk -o outputs/basic.sb3
 cargo run --bin rake -- examples/scratch_lists.rk -o outputs/scratch_lists.sb3
 cargo run --bin rake -- examples/events.rk -o outputs/events.sb3
+cargo run --bin rake -- examples/macros.rk -o outputs/macros.sb3
 cargo run --bin rake -- examples/basic.rk --emit-ir outputs/basic.ir
 cargo run --bin rake -- examples/basic.rk --emit-json outputs/basic.json
 ```
@@ -45,6 +46,25 @@ while score < limit {
 
 `int`、`float`、`bool`、`text`、`Scratch.Generics.Value`、変数、型注釈と型推論、算術・比較・論理演算、`if`、`while`を実装しています。`;` は任意です。`while` はScratchの「〜まで繰り返す」ブロックと条件反転へ変換します。
 
+## enum
+
+ペイロードを持たない `enum` を宣言できます。variant は宣言順に `0` からタグが割り当てられ、enum 名と variant 名はコンパイル時に解決されます。Scratch ではタグ数値として保存され、実行時の enum オブジェクトやディスパッチ表は作りません。代入、関数の引数と戻り値、`==` / `!=` に対応し、異なる enum 型同士や数値演算には使えません。
+
+```rake
+enum GameState {
+    Title,
+    Playing,
+    Paused,
+}
+
+var state: GameState = GameState.Title
+if state == GameState.Playing {
+    Scratch.Looks.say("Playing")
+}
+```
+
+enum 定数はクラスのフィールド初期値にも使えます。ペイロード付き variant と `match` はまだ未対応です。
+
 ## イベント
 
 トップレベルの`event <event> { ... }`でScratchイベントハットと本体を宣言します。組み込みイベントは`Scratch.Events`からimportして使い、カスタムメッセージは名前をそのままイベント名にします。`send <message>`はそのメッセージをbroadcastします。
@@ -72,9 +92,13 @@ event reset {
 
 変数の格納先は宣言位置で分けます。モジュール直下の変数はScratchのStage共有変数へ、関数内や制御ブロック内の変数は実行先Spriteの変数へ割り当てます。関数引数はScratchカスタムブロック引数です。Sprite変数は呼び出しごとのフレームではないため、同じSprite上で複数のスクリプトが並行して同じ関数を使う場合のローカル状態分離は今後の対応項目です。
 
-`fn` の関数宣言と呼び出し（`int` / `float` / `bool` / `text` / `Scratch.Generics.Value` の引数と戻り値）はScratchカスタムブロックへ変換します。戻り値は `fn add(a: int, b: int) -> int` のように型を宣言し、関数本体で `return a + b` と書きます。戻り値はコンパイル時に自動生成されるScratch変数へ保存され、式の中でも呼び出せます。戻り値あり関数はすべての経路で `return` が必要です。戻り値あり関数の再帰呼び出しは未対応です。Rake配列、`.rks` シーンDSL、`for` は未対応です。コンパイラは独自VMを出力せず、Scratch標準ブロックへ直接変換します。
+`fn` の関数宣言と呼び出し（`int` / `float` / `bool` / `text` / enum / `Scratch.Generics.Value` の引数と戻り値）はScratchカスタムブロックへ変換します。戻り値は `fn add(a: int, b: int) -> int` のように型を宣言し、関数本体で `return a + b` と書きます。戻り値はコンパイル時に自動生成されるScratch変数へ保存され、式の中でも呼び出せます。戻り値あり関数はすべての経路で `return` が必要です。戻り値あり関数の再帰呼び出しは未対応です。Rake配列、`.rks` シーンDSL、`for` は未対応です。コンパイラは独自VMを出力せず、Scratch標準ブロックへ直接変換します。
 
 `warp fn updateFast() { ... }` のように `fn` の前へ `warp` を付けると、そのカスタムブロックは画面を再描画せずに実行するScratchのwarpオプションを有効にします。
+
+## マクロ
+
+`macro! name (parameters...) { ... }` で定義し、`name!(arguments...)` で呼び出します。コンパイル前にトークン単位で単純置換するため、引数には式や入れ子の呼び出しを渡せます。引数の個数は検査され、置換後のコードは通常の型検査を受けます。文字列内の文字やコメントは置換しません。マクロはトップレベルに書き、再帰展開は最大64段です。例は [examples/macros.rk](examples/macros.rk) を参照してください。
 
 ## 名前空間とScratchブロック
 
@@ -104,7 +128,7 @@ var x: float = Scratch.Motion.xPosition()
 
 ScratchのリストはRake配列とは別の名前付き資源です。`use Scratch.Generics.List as SList` を読み込み、モジュール直下で `var inventory: SList = SList.new()` と作ります。`inventory.add()` / `inventory.get()` のようなメソッド呼び出しをScratch標準のリストブロックへ変換し、`get` は `Scratch.Generics.Value` を返します。詳細と例は [examples/scratch_lists.rk](examples/scratch_lists.rk) を参照してください。
 
-クラスは、モジュール直下で静的に宣言するインスタンス、`public` / `private` のフィールドとメソッド、`self` を使ったメソッド呼び出しを実装しています。アクセス修飾子を省略したメンバーは public です。フィールド初期値は数値、真偽値、または文字列のリテラルです。`new` は特別な生成処理ではなく、`return self` する通常のメソッドです。クラス型の変数は `var counter: Counter = Counter.new()` のように宣言します。
+クラスは、モジュール直下で静的に宣言するインスタンス、`public` / `private` のフィールドとメソッド、`self` を使ったメソッド呼び出しを実装しています。アクセス修飾子を省略したメンバーは public です。フィールド初期値には数値、真偽値、文字列リテラル、enum 定数を使えます。`new` は特別な生成処理ではなく、`return self` する通常のメソッドです。クラス型の変数は `var counter: Counter = Counter.new()` のように宣言します。
 
 ```text
 class Counter {

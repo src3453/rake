@@ -88,9 +88,7 @@ mod tests {
         assert!(send_keyword.iter().any(|item| item["label"] == "send"));
 
         let event_types = completion_at("event Scratch.Events.key", 24);
-        assert!(event_types
-            .iter()
-            .any(|item| item["label"] == "keyPressed"));
+        assert!(event_types.iter().any(|item| item["label"] == "keyPressed"));
         let all_event_types = completion_at("event ", 6);
         assert!(all_event_types
             .iter()
@@ -148,9 +146,20 @@ mod tests {
 
         let message_tokens = "event ready {}\nsend ready";
         let send_keyword_start = message_tokens.lines().nth(1).unwrap().find("send").unwrap();
-        let send_name_start = message_tokens.lines().nth(1).unwrap().find("ready").unwrap();
-        assert_eq!(semantic_type_at(message_tokens, 1, send_keyword_start as u32), Some(2));
-        assert_eq!(semantic_type_at(message_tokens, 1, send_name_start as u32), Some(5));
+        let send_name_start = message_tokens
+            .lines()
+            .nth(1)
+            .unwrap()
+            .find("ready")
+            .unwrap();
+        assert_eq!(
+            semantic_type_at(message_tokens, 1, send_keyword_start as u32),
+            Some(2)
+        );
+        assert_eq!(
+            semantic_type_at(message_tokens, 1, send_name_start as u32),
+            Some(5)
+        );
     }
 
     #[test]
@@ -187,7 +196,8 @@ mod tests {
         let function_completion = completion_at(text, text.lines().next().unwrap().len());
         assert!(function_completion
             .iter()
-            .any(|item| item["label"] == "fast" && item["detail"].as_str().unwrap().contains("warp fn fast()")));
+            .any(|item| item["label"] == "fast"
+                && item["detail"].as_str().unwrap().contains("warp fn fast()")));
     }
 
     #[test]
@@ -271,6 +281,122 @@ mod tests {
     }
 
     #[test]
+    fn enums_have_variant_completion_semantic_tokens_and_navigation() {
+        let keyword = completion_at("en", 2);
+        assert!(keyword.iter().any(|item| item["label"] == "enum"));
+        let completion_source = "enum State { Ready, Done }\nState.";
+        let completion = completion_items(
+            Some(&document(completion_source)),
+            &json!({"position": {"line": 1, "character": 6}}),
+        );
+        assert!(completion.iter().any(|item| item["label"] == "Ready"));
+        assert!(completion.iter().any(|item| item["label"] == "Done"));
+        let type_source = "enum State { Ready, Done }\nvar current: Sta";
+        let type_completion = completion_items(
+            Some(&document(type_source)),
+            &json!({"position": {"line": 1, "character": 19}}),
+        );
+        assert!(type_completion.iter().any(|item| item["label"] == "State"));
+
+        let text = "enum State { Ready, Done }\nvar current: State = State.Ready\n";
+        let tokens = source_tokens(text).unwrap();
+        let enum_keyword = tokens.iter().find(|token| token.text == "enum").unwrap();
+        let enum_name = tokens.iter().find(|token| token.text == "State").unwrap();
+        let variant = tokens
+            .iter()
+            .filter(|token| token.text == "Ready")
+            .last()
+            .unwrap();
+        assert_eq!(
+            semantic_type_at(text, enum_keyword.line, enum_keyword.start_character),
+            Some(2)
+        );
+        assert_eq!(
+            semantic_type_at(text, enum_name.line, enum_name.start_character),
+            Some(1)
+        );
+        let type_use = tokens
+            .iter()
+            .find(|token| token.line == 1 && token.text == "State")
+            .unwrap();
+        let expression_type_use = tokens
+            .iter()
+            .filter(|token| token.line == 1 && token.text == "State")
+            .last()
+            .unwrap();
+        assert_eq!(
+            semantic_type_at(text, type_use.line, type_use.start_character),
+            Some(1)
+        );
+        assert_eq!(
+            semantic_type_at(
+                text,
+                expression_type_use.line,
+                expression_type_use.start_character
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            semantic_type_at(text, variant.line, variant.start_character),
+            Some(8)
+        );
+
+        let document = document(text);
+        let definition = definition_result(
+            "file:///enum.rk",
+            &document,
+            Position {
+                line: variant.line,
+                character: variant.start_character,
+            },
+        );
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        assert!(definition["range"]["start"]["character"].as_u64().unwrap() > 0);
+        let hover = hover_result(
+            &document,
+            Position {
+                line: variant.line,
+                character: variant.start_character,
+            },
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("State::Ready = 0"));
+        let enum_definition = definition_result(
+            "file:///enum.rk",
+            &document,
+            Position {
+                line: type_use.line,
+                character: type_use.start_character,
+            },
+        );
+        assert_eq!(enum_definition["range"]["start"]["line"], 0);
+        let enum_hover = hover_result(
+            &document,
+            Position {
+                line: type_use.line,
+                character: type_use.start_character,
+            },
+        );
+        assert!(enum_hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("enum State"));
+        let symbols = document_symbols(&document);
+        assert!(symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|symbol| { symbol["name"] == "State" && symbol["kind"] == 10 }));
+        assert!(symbols
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|symbol| { symbol["name"] == "Ready" && symbol["kind"] == 22 }));
+    }
+
+    #[test]
     fn event_handlers_have_hover_and_document_symbols() {
         let text = "use Scratch.Events.greenFlag as start\nevent start {}";
         let document = document(text);
@@ -328,8 +454,19 @@ mod tests {
         assert_eq!(definition["range"]["start"]["character"], 6);
         let references = references_result("file:///messages.rk", &document, send_position, true);
         assert_eq!(references.as_array().unwrap().len(), 3);
-        let rename = rename_result("file:///messages.rk", &document, send_position, "readyAgain");
-        assert_eq!(rename["changes"]["file:///messages.rk"].as_array().unwrap().len(), 3);
+        let rename = rename_result(
+            "file:///messages.rk",
+            &document,
+            send_position,
+            "readyAgain",
+        );
+        assert_eq!(
+            rename["changes"]["file:///messages.rk"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
@@ -354,12 +491,10 @@ mod tests {
                 character: get_start as u32,
             },
         );
-        assert!(
-            hover["contents"]["value"]
-                .as_str()
-                .unwrap()
-                .contains("Scratch.Generics.List.get")
-        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("Scratch.Generics.List.get"));
 
         let occurrences = symbol_occurrences(&document);
         let list_occurrences: Vec<_> = occurrences
@@ -367,21 +502,15 @@ mod tests {
             .filter(|occurrence| occurrence.name == "inventory")
             .collect();
         assert_eq!(list_occurrences.len(), 3);
-        assert!(
-            list_occurrences
-                .iter()
-                .any(|occurrence| occurrence.declaration)
-        );
-        assert!(
-            list_occurrences
-                .iter()
-                .any(|occurrence| !occurrence.declaration)
-        );
-        assert!(
-            list_occurrences
-                .iter()
-                .all(|occurrence| occurrence.scratch_list)
-        );
+        assert!(list_occurrences
+            .iter()
+            .any(|occurrence| occurrence.declaration));
+        assert!(list_occurrences
+            .iter()
+            .any(|occurrence| !occurrence.declaration));
+        assert!(list_occurrences
+            .iter()
+            .all(|occurrence| occurrence.scratch_list));
 
         let use_start = text.lines().nth(3).unwrap().find("inventory").unwrap() as u32;
         let declaration = definition_result(
@@ -452,5 +581,34 @@ mod tests {
             semantic_type_at(text, get.line, get.start_character),
             Some(5)
         );
+    }
+
+    #[test]
+    fn macros_are_suggested_and_highlighted() {
+        let source = "macro! twice (value) { value + value }\ntw";
+        let completions = completion_at(source, source.len());
+        assert!(completions.iter().any(|item| {
+            item["label"] == "twice" && item["insertText"] == "twice!(${1:value})"
+        }));
+        assert_eq!(semantic_type_at("macro! twice (x) { x }", 0, 0), Some(2));
+        assert_eq!(semantic_type_at("macro! twice (x) { x }", 0, 7), Some(5));
+    }
+
+    #[test]
+    fn macro_hover_and_definition_point_to_the_declaration() {
+        let text = "macro! twice (x) { x + x }\ntwice!(2)";
+        let doc = document(text);
+        let position = Position {
+            line: 1,
+            character: 2,
+        };
+        let hover = hover_result(&doc, position);
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("macro! twice"));
+        let definition = definition_result("file:///test.rk", &doc, position);
+        assert_eq!(definition["range"]["start"]["line"], 0);
+        assert_eq!(definition["range"]["start"]["character"], 7);
     }
 }

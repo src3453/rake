@@ -1,0 +1,13 @@
+macro! twice (value) {
+    value + value
+}
+
+macro! declareScore (initial) {
+    var score: int = initial
+}
+
+declareScore!(twice!(3))
+
+event Scratch.Events.greenFlag {
+    score = score + 1
+}

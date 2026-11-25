@@ -8,6 +8,7 @@ enum Type {
     ScratchValue,
     ScratchList,
     Class(u32),
+    Enum(u32),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,6 +46,7 @@ impl Type {
             Self::ScratchValue => "Scratch.Generics.Value",
             Self::ScratchList => "Scratch.Generics.List",
             Self::Class(_) => "class instance",
+            Self::Enum(_) => "enum value",
         }
     }
 
@@ -100,6 +102,20 @@ struct ClassInfo {
     id: u32,
     fields: Vec<FieldDeclaration>,
     methods: HashMap<String, FunctionInfo>,
+}
+
+#[derive(Clone, Debug)]
+struct EnumVariantInfo {
+    token: Token,
+    name: String,
+    value: i64,
+}
+
+#[derive(Clone, Debug)]
+struct EnumInfo {
+    name: String,
+    id: u32,
+    variants: HashMap<String, EnumVariantInfo>,
 }
 
 #[derive(Clone, Debug)]

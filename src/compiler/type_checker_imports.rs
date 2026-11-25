@@ -89,6 +89,7 @@ impl TypeChecker {
                     if members.is_empty() {
                         let final_path_is_symbol = self.functions.contains_key(namespace)
                             || self.classes.contains_key(namespace)
+                            || self.enums.contains_key(namespace)
                             || builtin_block(namespace).is_some()
                             || builtin_event(namespace).is_some()
                             || builtin_type_path(namespace).is_some();
@@ -109,13 +110,14 @@ impl TypeChecker {
                             let target = format!("{namespace}.{member}");
                             if !self.functions.contains_key(&target)
                                 && !self.classes.contains_key(&target)
+                                && !self.enums.contains_key(&target)
                                 && builtin_block(&target).is_none()
                                 && builtin_event(&target).is_none()
                                 && builtin_type_path(&target).is_none()
                             {
                                 return Err(diagnostic(
                                     member_token,
-                                    format!("unknown function, class, or event {target:?}"),
+                                    format!("unknown function, class, enum, or event {target:?}"),
                                 ));
                             }
                         }
@@ -155,6 +157,14 @@ impl TypeChecker {
             .current_function
             .as_ref()
             .and_then(|function| function.name.rsplit_once('.').map(|(scope, _)| scope))
+            .or_else(|| {
+                self.current_method_class.and_then(|class_id| {
+                    self.classes
+                        .values()
+                        .find(|class| class.id == class_id)
+                        .and_then(|class| class.name.rsplit_once('.').map(|(scope, _)| scope))
+                })
+            })
             .unwrap_or("");
         if !name.contains('.') {
             let local = if scope.is_empty() {
@@ -162,7 +172,10 @@ impl TypeChecker {
             } else {
                 format!("{scope}.{name}")
             };
-            if self.functions.contains_key(&local) || self.classes.contains_key(&local) {
+            if self.functions.contains_key(&local)
+                || self.classes.contains_key(&local)
+                || self.enums.contains_key(&local)
+            {
                 return local;
             }
         }

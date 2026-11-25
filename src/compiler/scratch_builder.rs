@@ -194,6 +194,7 @@ impl ScratchBuilder {
                 Stmt::Function { .. }
                     | Stmt::Event { .. }
                     | Stmt::Class { .. }
+                    | Stmt::Enum { .. }
                     | Stmt::Namespace { .. }
                     | Stmt::Use { .. }
             ) {
@@ -265,7 +266,7 @@ impl ScratchBuilder {
             .map(|argument| match argument.ty {
                 Type::Bool => "false",
                 Type::Text | Type::Any | Type::ScratchValue => "",
-                Type::Int | Type::Float | Type::Class(_) => "0",
+                Type::Int | Type::Float | Type::Class(_) | Type::Enum(_) => "0",
                 Type::ScratchList => unreachable!("Scratch lists cannot be procedure arguments"),
             })
             .collect::<Vec<_>>();
@@ -625,12 +626,15 @@ impl ScratchBuilder {
         if let ExprKind::Number(value) = &expr.kind {
             return Ok(json!([1, [4, value]]));
         }
+        if let ExprKind::EnumValue { value, .. } = &expr.kind {
+            return Ok(json!([1, [4, value.to_string()]]));
+        }
         if let ExprKind::Text(value) = &expr.kind {
             return Ok(json!([1, [10, value]]));
         }
         let reporter = self.reporter(expr, parent)?;
         let shadow = match expr.ty {
-            Some(Type::Int | Type::Float) => json!([4, 10]),
+            Some(Type::Int | Type::Float | Type::Enum(_)) => json!([4, 10]),
             _ => json!([10, ""]),
         };
         Ok(json!([3, reporter, shadow]))
@@ -639,6 +643,7 @@ impl ScratchBuilder {
     fn reporter(&mut self, expr: &Expr, parent: &str) -> Result<String, String> {
         match &expr.kind {
             ExprKind::Number(value) => self.boolean_literal(value != "0", parent),
+            ExprKind::EnumValue { .. } => Err("enum values are numeric shadow inputs, not reporters".to_string()),
             ExprKind::Boolean(value) => self.boolean_literal(*value, parent),
             ExprKind::Text(_) => {
                 Err("text literals are Scratch shadow inputs, not reporters".to_string())
@@ -849,6 +854,9 @@ pub struct SymbolOccurrence {
     pub event_handler: bool,
     pub event_message: bool,
     pub class_symbol: bool,
+    pub enum_symbol: bool,
+    pub enum_variant: bool,
+    pub enum_type_id: Option<u32>,
     pub namespace_symbol: bool,
     pub scratch_list: bool,
     pub private_member: bool,
