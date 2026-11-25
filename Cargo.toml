@@ -1,0 +1,11 @@
+[package]
+name = "rake"
+version = "0.1.0"
+edition = "2024"
+description = "A small compiler that emits Scratch 3 projects"
+license = "MIT"
+
+[dependencies]
+ariadne = "0.6.0"
+serde_json = "1.0.154"
+zip = { version = "2.4.2", default-features = false, features = ["deflate-miniz"] }

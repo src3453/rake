@@ -1,0 +1,66 @@
+{
+  "name": "rake-language",
+  "displayName": "Rake Language Support",
+  "description": "Syntax highlighting, diagnostics, and completion for the Rake language.",
+  "version": "0.1.0",
+  "publisher": "rake-language",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:rake"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rake",
+        "aliases": ["Rake", "rake"],
+        "extensions": [".rk"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rake",
+        "scopeName": "source.rake",
+        "path": "./syntaxes/rake.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "rake",
+        "path": "./snippets/rake.json"
+      }
+    ],
+    "configuration": {
+      "title": "Rake",
+      "properties": {
+        "rake.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path or command name for a Rake language server executable. Leave empty to use the executable bundled with the extension."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build:server": "node ./scripts/build-server.js",
+    "vscode:prepublish": "npm run compile && npm run build:server"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5",
+    "@vscode/vsce": "^2.26.0"
+  }
+}

@@ -1,0 +1,11 @@
+/target/
+/editors/vscode/node_modules/
+/editors/vscode/out/
+/editors/vscode/server/
+__pycache__/
+*.py[cod]
+/work/scratch-editor/
+/work/validation/
+.DS_Store
+__MACOSX/
+*.vsix

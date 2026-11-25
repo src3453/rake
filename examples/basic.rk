@@ -1,0 +1,15 @@
+var score: int = 0
+var lives: int = 3
+var active: bool = true
+
+if active && lives > 0 {
+    score = score + 10
+} else {
+    score = 0
+}
+
+while lives > 0 {
+    lives -= 1
+}
+
+score += 2
