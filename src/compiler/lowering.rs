@@ -33,6 +33,7 @@ impl GeneratedSymbolAllocator {
             scratch_name,
             ty,
             mutable: false,
+            visibility: Visibility::Public,
             id: symbol_id.clone(),
             semantic_id: symbol_id,
             argument_id: None,
@@ -125,12 +126,21 @@ fn lower_expression(
             lower_expression(left, before, symbols, allocator)?;
             lower_expression(right, before, symbols, allocator)?;
         }
+        ExprKind::ObjectInit { arguments, .. } => {
+            for argument in arguments {
+                lower_expression(argument, before, symbols, allocator)?;
+            }
+        }
         ExprKind::Call {
             name,
+            receiver,
             arguments,
             info,
             builtin,
         } => {
+            if let Some(receiver) = receiver {
+                lower_expression(receiver, before, symbols, allocator)?;
+            }
             for argument in arguments.iter_mut() {
                 lower_expression(argument, before, symbols, allocator)?;
             }
@@ -151,6 +161,7 @@ fn lower_expression(
             before.push(Stmt::Call {
                 token: token.clone(),
                 name: name.clone(),
+                receiver: None,
                 arguments: arguments.clone(),
                 info: Some(info),
                 builtin: None,
@@ -180,7 +191,6 @@ fn lower_expression(
         | ExprKind::Number(_)
         | ExprKind::Boolean(_)
         | ExprKind::Text(_)
-        | ExprKind::ObjectInit { .. }
         | ExprKind::ScratchListInit
         | ExprKind::Name { .. } => {}
     }

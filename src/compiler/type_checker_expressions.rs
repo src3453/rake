@@ -1,4 +1,157 @@
 impl TypeChecker {
+    fn check_method_arguments(
+        &mut self,
+        arguments: &mut [Expr],
+        signature: &FunctionInfo,
+        token: &Token,
+    ) -> Result<(), String> {
+        if arguments.len() != signature.arguments.len() {
+            return Err(diagnostic(
+                token,
+                format!(
+                    "method {:?} expects {} argument(s), got {}",
+                    signature.name,
+                    signature.arguments.len(),
+                    arguments.len()
+                ),
+            ));
+        }
+        for (argument, parameter) in arguments.iter_mut().zip(&signature.arguments) {
+            let actual = self.check_expr(argument)?;
+            if !Self::assignable(parameter.ty, actual) {
+                return Err(diagnostic(
+                    &argument.token,
+                    format!(
+                        "cannot pass {} to {} parameter {:?} of method {:?}",
+                        actual.name(),
+                        parameter.ty.name(),
+                        parameter.name,
+                        signature.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_instance_method(
+        &mut self,
+        receiver: &mut Expr,
+        method_name: &str,
+        token: &Token,
+    ) -> Result<Option<FunctionInfo>, String> {
+        let receiver_name = match &receiver.kind {
+            ExprKind::Name { value, .. } => value.clone(),
+            _ => return Ok(None),
+        };
+        let Some(symbol) = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&receiver_name).cloned())
+        else {
+            return Ok(None);
+        };
+        let Type::Class(class_id) = symbol.ty else {
+            return Ok(None);
+        };
+        self.check_expr(receiver)?;
+        let object_symbol = match &receiver.kind {
+            ExprKind::Name {
+                symbol: Some(symbol), ..
+            } => symbol,
+            _ => unreachable!("checked method receiver must remain a name"),
+        };
+        let instance = self.objects.get(&object_symbol.id).ok_or_else(|| {
+            diagnostic(token, "method calls require a statically declared class instance")
+        })?;
+        if instance.class_id != class_id {
+            return Err("internal error: class instance type mismatch".to_string());
+        }
+        let method = instance.methods.get(method_name).cloned().ok_or_else(|| {
+            diagnostic(token, format!("class has no method {method_name:?}"))
+        })?;
+        if method.return_type == Some(Type::Class(class_id)) {
+            return Err(diagnostic(
+                token,
+                "the new method must be called as ClassName.new() when declaring an instance",
+            ));
+        }
+        if method.visibility == Visibility::Private
+            && self.current_method_class != Some(class_id)
+        {
+            return Err(diagnostic(
+                token,
+                format!("method {method_name:?} is private"),
+            ));
+        }
+        Ok(Some(method))
+    }
+
+    fn check_class_constructor_call(&mut self, expression: &mut Expr) -> Result<bool, String> {
+        let (receiver_name, class_token, method_name, call_token) = match &expression.kind {
+            ExprKind::Call {
+                name,
+                receiver: Some(receiver),
+                ..
+            } => {
+                let Some(value) = qualified_expression_name(receiver) else {
+                    return Ok(false);
+                };
+                if matches!(&receiver.kind, ExprKind::Name { .. })
+                    && self.scopes.iter().rev().any(|scope| scope.contains_key(&value))
+                {
+                    return Ok(false);
+                }
+                (
+                    value,
+                    receiver.token.clone(),
+                    name.rsplit('.').next().unwrap_or(name).to_string(),
+                    expression.token.clone(),
+                )
+            }
+            _ => return Ok(false),
+        };
+        let class_name = self.resolve_name(&receiver_name);
+        let Some(class) = self.classes.get(&class_name).cloned() else {
+            return Ok(false);
+        };
+        if method_name != "new" {
+            return Err(diagnostic(
+                &call_token,
+                format!("class {:?} has no associated method {method_name:?}", class.name),
+            ));
+        }
+        let constructor = class.methods.get("new").cloned().ok_or_else(|| {
+            diagnostic(&call_token, format!("class {:?} has no constructor method", class.name))
+        })?;
+        if constructor.visibility == Visibility::Private
+            && self.current_method_class != Some(class.id)
+        {
+            return Err(diagnostic(&call_token, "constructor method new is private"));
+        }
+        let ExprKind::Call { arguments, .. } = &mut expression.kind else {
+            unreachable!();
+        };
+        self.check_method_arguments(arguments, &constructor, &call_token)?;
+        if constructor.return_type != Some(Type::Class(class.id)) {
+            return Err(diagnostic(
+                &call_token,
+                "new must return self with the declared class type",
+            ));
+        }
+        let arguments = arguments.clone();
+        expression.kind = ExprKind::ObjectInit {
+            class_id: class.id,
+            class_name: class.name,
+            class_token,
+            constructor: Some(constructor),
+            arguments,
+        };
+        expression.ty = Some(Type::Class(class.id));
+        Ok(true)
+    }
+
     fn assignable(expected: Type, actual: Type) -> bool {
         expected == Type::Any
             || expected == actual
@@ -67,17 +220,50 @@ impl TypeChecker {
 
     fn check_expr(&mut self, expression: &mut Expr) -> Result<Type, String> {
         let call_token = expression.token.clone();
+        if self.check_class_constructor_call(expression)? {
+            return Ok(expression.ty.unwrap());
+        }
+        let method_call = if let ExprKind::Call {
+            name,
+            receiver: Some(receiver),
+            builtin: None,
+            ..
+        } = &mut expression.kind
+        {
+            self.resolve_instance_method(
+                receiver,
+                name.rsplit('.').next().unwrap_or(name),
+                &call_token,
+            )?
+        } else {
+            None
+        };
+        if let Some(method) = method_call {
+            let ExprKind::Call { name, arguments, info, .. } = &mut expression.kind else {
+                unreachable!();
+            };
+            self.check_method_arguments(arguments, &method, &call_token)?;
+            let return_type = method.return_type.ok_or_else(|| {
+                diagnostic(&call_token, format!("method {:?} does not return a value", method.name))
+            })?;
+            *name = method.name.clone();
+            *info = Some(method);
+            expression.ty = Some(return_type);
+            return Ok(return_type);
+        }
         if let ExprKind::Call {
             name,
+            receiver,
             arguments,
             builtin,
             ..
         } = &mut expression.kind
         {
-            if let Some((list_method, receiver)) = self.list_method_call(name, &call_token) {
-                arguments.insert(0, receiver);
+            if let Some((list_method, list_receiver)) = self.list_method_call(name, &call_token) {
+                arguments.insert(0, list_receiver);
                 *name = list_method.name.to_string();
                 *builtin = Some(list_method);
+                *receiver = None;
             }
         }
         let resolved_call = match &expression.kind {
@@ -102,6 +288,12 @@ impl TypeChecker {
             (resolved_call.as_ref(), &expression.kind)
         {
             if let Some(class) = self.classes.get(resolved_name) {
+                if class.methods.contains_key("new") {
+                    return Err(diagnostic(
+                        &expression.token,
+                        "classes with a new method must be initialized with ClassName.new()",
+                    ));
+                }
                 if !arguments.is_empty() {
                     return Err(diagnostic(
                         &expression.token,
@@ -113,6 +305,9 @@ impl TypeChecker {
                 expression.kind = ExprKind::ObjectInit {
                     class_id,
                     class_name,
+                    class_token: expression.token.clone(),
+                    constructor: None,
+                    arguments: Vec::new(),
                 };
                 expression.ty = Some(Type::Class(class_id));
                 return Ok(Type::Class(class_id));
@@ -169,11 +364,20 @@ impl TypeChecker {
                 let field = instance.fields.get(name).cloned().ok_or_else(|| {
                     diagnostic(&expression.token, format!("class has no field {name:?}"))
                 })?;
+                if instance.private_fields.contains(name)
+                    && self.current_method_class != Some(class_id)
+                {
+                    return Err(diagnostic(
+                        &expression.token,
+                        format!("field {name:?} is private"),
+                    ));
+                }
                 *symbol = Some(field.clone());
                 field.ty
             }
             ExprKind::Call {
                 name,
+                receiver: _,
                 arguments,
                 info,
                 builtin,

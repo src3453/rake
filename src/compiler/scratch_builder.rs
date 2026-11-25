@@ -190,8 +190,11 @@ impl ScratchBuilder {
             {
                 continue;
             }
-            if matches!(statement, Stmt::VarDecl { symbol: Some(symbol), object_fields, .. }
-                if symbol.storage == StorageClass::ObjectBinding && object_fields.is_empty())
+            if matches!(statement, Stmt::VarDecl {
+                symbol: Some(symbol), object_fields, initializer, ..
+            } if symbol.storage == StorageClass::ObjectBinding
+                && object_fields.is_empty()
+                && !matches!(&initializer.kind, ExprKind::ObjectInit { constructor: Some(_), .. }))
             {
                 continue;
             }
@@ -326,12 +329,28 @@ impl ScratchBuilder {
                 let function = function.ok_or_else(|| {
                     "internal error: return statement outside a function".to_string()
                 })?;
-                let return_symbol = function.return_symbol.as_ref().ok_or_else(|| {
-                    "internal error: return statement in a function without a result".to_string()
-                })?;
                 let completion = function.completed_symbol.as_ref().ok_or_else(|| {
                     "internal error: missing function completion variable".to_string()
                 })?;
+                let Some(return_symbol) = function.return_symbol.as_ref() else {
+                    if !matches!(&value.kind, ExprKind::Name { value, .. } if value == "self") {
+                        return Err("internal error: class constructor must return self".to_string());
+                    }
+                    let finish = self.block(
+                        "data_setvariableto",
+                        Some(parent),
+                        false,
+                        json!({"VARIABLE": [completion.scratch_name, completion.id]}),
+                    );
+                    let truth = Expr {
+                        kind: ExprKind::Boolean(true),
+                        token: Token::new(TokenKind::Identifier, "true", 1, 1),
+                        ty: Some(Type::Bool),
+                    };
+                    let input = self.value_input(&truth, &finish)?;
+                    self.input(&finish, "VALUE", input);
+                    return Ok(finish);
+                };
                 let assign = self.block(
                     "data_setvariableto",
                     Some(parent),
@@ -383,6 +402,7 @@ impl ScratchBuilder {
             }
             Stmt::VarDecl {
                 object_fields,
+                initializer,
                 symbol:
                     Some(Symbol {
                         storage: StorageClass::ObjectBinding,
@@ -441,6 +461,30 @@ impl ScratchBuilder {
                         first = Some(block.clone());
                     }
                     previous = Some(block);
+                }
+                if let ExprKind::ObjectInit {
+                    constructor: Some(constructor),
+                    arguments,
+                    ..
+                } = &initializer.kind
+                {
+                    let parent_block = previous.as_deref().unwrap_or(parent);
+                    let call = self.block("procedures_call", Some(parent_block), false, json!({}));
+                    self.blocks.get_mut(&call).unwrap()["mutation"] =
+                        Self::procedure_mutation(constructor);
+                    for (argument, parameter) in arguments.iter().zip(&constructor.arguments) {
+                        let input = if parameter.ty == Type::Bool {
+                            self.boolean_input(argument, &call)?
+                        } else {
+                            self.value_input(argument, &call)?
+                        };
+                        self.input(&call, &parameter.id, input);
+                    }
+                    if let Some(previous_id) = previous.as_ref() {
+                        self.blocks.get_mut(previous_id).unwrap()["next"] = json!(call);
+                    } else {
+                        first = Some(call.clone());
+                    }
                 }
                 first.ok_or_else(|| "internal error: empty object initialization".to_string())
             }
@@ -791,6 +835,7 @@ pub struct SymbolOccurrence {
     pub class_symbol: bool,
     pub namespace_symbol: bool,
     pub scratch_list: bool,
+    pub private_member: bool,
     pub line: u32,
     pub character: u32,
     pub length: u32,

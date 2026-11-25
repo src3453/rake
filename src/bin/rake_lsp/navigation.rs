@@ -141,7 +141,9 @@ fn hover_result(document: &Document, position: Position) -> Value {
     } else if occurrence.function {
         (
             occurrence.ty.clone(),
-            if occurrence.ty.contains(" -> ") {
+            if occurrence.private_member {
+                "Private method; callable only from methods of the declaring class."
+            } else if occurrence.ty.contains(" -> ") {
                 "Function returning a value."
             } else {
                 "Function with no return value."
@@ -151,6 +153,16 @@ fn hover_result(document: &Document, position: Position) -> Value {
         (
             format!("{}: {}", occurrence.name, occurrence.ty),
             "Function parameter; read-only inside the function.",
+        )
+    } else if occurrence.private_member && occurrence.mutable {
+        (
+            format!("private var {}: {}", occurrence.name, occurrence.ty),
+            "Private mutable class field.",
+        )
+    } else if occurrence.private_member {
+        (
+            format!("private const {}: {}", occurrence.name, occurrence.ty),
+            "Private constant class field.",
         )
     } else if occurrence.mutable {
         (
@@ -203,6 +215,9 @@ fn valid_identifier(name: &str) -> bool {
             "var"
                 | "const"
                 | "class"
+                | "public"
+                | "private"
+                | "self"
                 | "scratch"
                 | "list"
                 | "fn"

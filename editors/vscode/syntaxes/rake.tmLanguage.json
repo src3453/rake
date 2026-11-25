@@ -41,7 +41,7 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|class|fn|warp|event|if|else|while|return)\\b"
+          "match": "\\b(var|const|class|public|private|fn|warp|event|if|else|while|return|self)\\b"
         }
       ]
     },

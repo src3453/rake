@@ -36,6 +36,9 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             {
                 Some(types["type"])
             }
+            SourceTokenKind::Identifier if class_type_at(&tokens, token_index) => {
+                Some(types["type"])
+            }
             SourceTokenKind::Identifier
                 if token_index > 0
                     && tokens[token_index - 1].text == "event"
@@ -49,6 +52,9 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                     "var"
                         | "const"
                         | "class"
+                        | "public"
+                        | "private"
+                        | "self"
                         | "fn"
                         | "warp"
                         | "event"

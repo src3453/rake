@@ -52,6 +52,9 @@ enum ExprKind {
     ObjectInit {
         class_id: u32,
         class_name: String,
+        class_token: Token,
+        constructor: Option<FunctionInfo>,
+        arguments: Vec<Expr>,
     },
     ScratchListInit,
     Name {
@@ -74,6 +77,7 @@ enum ExprKind {
     },
     Call {
         name: String,
+        receiver: Option<Box<Expr>>,
         arguments: Vec<Expr>,
         info: Option<FunctionInfo>,
         builtin: Option<BuiltinBlock>,
@@ -109,6 +113,7 @@ enum Stmt {
         name_token: Token,
         name: String,
         fields: Vec<FieldDeclaration>,
+        methods: Vec<Stmt>,
     },
     Function {
         name_token: Token,
@@ -118,6 +123,9 @@ enum Stmt {
         return_type: Option<Type>,
         body: Vec<Stmt>,
         info: Option<FunctionInfo>,
+        visibility: Visibility,
+        owner_class: Option<String>,
+        method_name: Option<String>,
     },
     Event {
         type_token: Token,
@@ -131,6 +139,7 @@ enum Stmt {
     Call {
         token: Token,
         name: String,
+        receiver: Option<Box<Expr>>,
         arguments: Vec<Expr>,
         info: Option<FunctionInfo>,
         builtin: Option<BuiltinBlock>,
@@ -182,6 +191,8 @@ struct Parser {
     index: usize,
     namespace: Vec<String>,
     type_aliases: HashMap<String, Type>,
+    class_ids: HashMap<String, u32>,
+    next_class_id: u32,
 }
 
 impl Parser {
@@ -191,6 +202,8 @@ impl Parser {
             index: 0,
             namespace: Vec::new(),
             type_aliases: HashMap::new(),
+            class_ids: HashMap::new(),
+            next_class_id: 0,
         }
     }
     fn current(&self) -> &Token {
@@ -214,7 +227,9 @@ impl Parser {
         Ok(self.take())
     }
     fn expect_identifier(&mut self) -> Result<Token, String> {
-        if self.current().kind != TokenKind::Identifier {
+        if self.current().kind != TokenKind::Identifier
+            || matches!(self.current().text.as_str(), "public" | "private" | "self")
+        {
             return Err(diagnostic(self.current(), "expected an identifier"));
         }
         Ok(self.take())
@@ -229,6 +244,21 @@ impl Parser {
         }
         if let Ok(ty) = Type::parse(&path, &token) {
             return Ok(ty);
+        }
+        let mut scope = self.namespace.clone();
+        loop {
+            let prefix = scope.join(".");
+            let candidate = if prefix.is_empty() {
+                path.clone()
+            } else {
+                format!("{prefix}.{path}")
+            };
+            if let Some(class_id) = self.class_ids.get(&candidate) {
+                return Ok(Type::Class(*class_id));
+            }
+            if scope.pop().is_none() {
+                break;
+            }
         }
         if !path.contains('.') {
             let mut scope = self.namespace.clone();
@@ -440,8 +470,12 @@ impl Parser {
         self.expect("class")?;
         let name_token = self.expect_identifier()?;
         let name = self.qualified_name(&name_token.text);
+        let class_id = self.next_class_id;
+        self.next_class_id += 1;
+        self.class_ids.insert(name.clone(), class_id);
         self.expect("{")?;
         let mut fields = Vec::new();
+        let mut methods = Vec::new();
         self.semicolons();
         while !self.at("}") {
             if self.current().kind == TokenKind::Eof {
@@ -450,26 +484,59 @@ impl Parser {
                     "expected '}' before end of file",
                 ));
             }
-            let keyword = self.take();
-            if keyword.text != "var" && keyword.text != "const" {
+            let visibility = if self.at("public") {
+                self.take();
+                Visibility::Public
+            } else if self.at("private") {
+                self.take();
+                Visibility::Private
+            } else {
+                Visibility::Public
+            };
+            if self.at("var") || self.at("const") {
+                let keyword = self.take();
+                let field_token = self.expect_identifier()?;
+                let field_name = field_token.text.clone();
+                self.expect(":")?;
+                let ty = self.type_annotation()?;
+                self.expect("=")?;
+                let initializer = self.expression(1)?;
+                fields.push(FieldDeclaration {
+                    token: field_token,
+                    name: field_name,
+                    ty,
+                    mutable: keyword.text == "var",
+                    visibility,
+                    initializer,
+                });
+            } else if self.function_declaration_starts_here() {
+                let mut method = self.function_declaration()?;
+                let Stmt::Function {
+                    name: function_name,
+                    visibility: method_visibility,
+                    owner_class,
+                    method_name,
+                    ..
+                } = &mut method
+                else {
+                    unreachable!();
+                };
+                let leaf_name = function_name
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(function_name)
+                    .to_string();
+                *method_name = Some(leaf_name.clone());
+                *owner_class = Some(name.clone());
+                *function_name = format!("{name}.{leaf_name}");
+                *method_visibility = visibility;
+                methods.push(method);
+            } else {
                 return Err(diagnostic(
-                    &keyword,
-                    "class bodies currently support var and const fields",
+                    self.current(),
+                    "class bodies support fields and fn methods, optionally prefixed with public or private",
                 ));
             }
-            let field_token = self.expect_identifier()?;
-            let field_name = field_token.text.clone();
-            self.expect(":")?;
-            let ty = self.type_annotation()?;
-            self.expect("=")?;
-            let initializer = self.expression(1)?;
-            fields.push(FieldDeclaration {
-                token: field_token,
-                name: field_name,
-                ty,
-                mutable: keyword.text == "var",
-                initializer,
-            });
             self.semicolons();
         }
         self.take();
@@ -477,6 +544,7 @@ impl Parser {
             name_token,
             name,
             fields,
+            methods,
         })
     }
 
@@ -539,6 +607,9 @@ impl Parser {
             return_type,
             body,
             info: None,
+            visibility: Visibility::Public,
+            owner_class: None,
+            method_name: None,
         })
     }
 
@@ -627,12 +698,16 @@ impl Parser {
         if self.current().kind == TokenKind::Identifier && self.tokens[self.index + 1].text == "." {
             let expression = self.expression(1)?;
             if let ExprKind::Call {
-                name, arguments, ..
+                name,
+                receiver,
+                arguments,
+                ..
             } = expression.kind
             {
                 return Ok(Stmt::Call {
                     token: expression.token,
                     name,
+                    receiver,
                     arguments,
                     info: None,
                     builtin: None,
@@ -667,6 +742,7 @@ impl Parser {
         Ok(Stmt::Call {
             token,
             name,
+            receiver: None,
             arguments,
             info: None,
             builtin: None,
@@ -843,6 +919,7 @@ impl Parser {
                     self.postfix(Expr {
                         kind: ExprKind::Call {
                             name: token.text.clone(),
+                            receiver: None,
                             arguments,
                             info: None,
                             builtin: None,
@@ -878,6 +955,7 @@ impl Parser {
                 expression = Expr {
                     kind: ExprKind::Call {
                         name,
+                        receiver: Some(Box::new(expression)),
                         arguments,
                         info: None,
                         builtin: None,

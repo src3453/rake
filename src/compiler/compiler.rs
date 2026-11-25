@@ -22,9 +22,12 @@ fn has_module_runtime_statements(statements: &[Stmt]) -> bool {
         Stmt::VarDecl {
             symbol: Some(symbol),
             object_fields,
+            initializer,
             ..
         } if symbol.storage == StorageClass::ProjectList
-            || (symbol.storage == StorageClass::ObjectBinding && object_fields.is_empty()) =>
+            || (symbol.storage == StorageClass::ObjectBinding
+                && object_fields.is_empty()
+                && !matches!(&initializer.kind, ExprKind::ObjectInit { constructor: Some(_), .. })) =>
         {
             false
         }

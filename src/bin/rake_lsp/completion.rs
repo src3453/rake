@@ -183,6 +183,8 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("var", 14, "Mutable variable declaration"),
             ("const", 14, "Constant declaration"),
             ("class", 14, "Class declaration"),
+            ("public", 14, "Public class member"),
+            ("private", 14, "Private class member"),
             ("if", 14, "Conditional statement"),
             ("else", 14, "Alternative branch"),
             ("while", 14, "Loop statement"),
@@ -217,6 +219,17 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     }
 
     if type_context {
+        for class_name in declared_class_names(&tokens) {
+            if class_name.starts_with(&prefix) {
+                items.push(json!({
+                    "label": class_name,
+                    "kind": 7,
+                    "detail": "Class type",
+                    "insertText": class_name,
+                    "sortText": format!("0-{class_name}")
+                }));
+            }
+        }
         for (local, target) in source_imported_names(&tokens) {
             if !local.contains('.')
                 && local.starts_with(&prefix)
@@ -251,8 +264,17 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     }
 
     if let Some(receiver) = &member_receiver {
-        if let Some(class_name) = instance_class_name(&tokens, receiver) {
-            for (name, ty, mutable) in class_fields(&tokens, &class_name) {
+        let class_name = if receiver == "self" {
+            class_at_position(&tokens, position)
+        } else {
+            instance_class_name(&tokens, receiver)
+        };
+        if let Some(class_name) = class_name {
+            let allow_private = class_at_position(&tokens, position).as_deref() == Some(class_name.as_str());
+            for (name, ty, mutable, private) in class_fields(&tokens, &class_name) {
+                if private && !allow_private {
+                    continue;
+                }
                 if name.starts_with(&prefix) {
                     items.push(json!({
                         "label": name,
@@ -262,6 +284,37 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                         "sortText": format!("0-{name}")
                     }));
                 }
+            }
+            for (method, private) in class_methods(&tokens, &class_name) {
+                if private && !allow_private || !method.name.starts_with(&prefix) {
+                    continue;
+                }
+                let arguments = method
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (name, _))| format!("${{{}:{name}}}", index + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let signature = method
+                    .parameters
+                    .iter()
+                    .map(|(name, ty)| format!("{name}: {ty}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let return_type = method
+                    .return_type
+                    .as_ref()
+                    .map(|ty| format!(" -> {ty}"))
+                    .unwrap_or_default();
+                items.push(json!({
+                    "label": method.name,
+                    "kind": 2,
+                    "detail": format!("{} fn {}({signature}){return_type}", if method.warp { "warp" } else { "" }, method.qualified_name).trim(),
+                    "insertText": format!("{}({arguments})", method.name),
+                    "insertTextFormat": 2,
+                    "sortText": format!("0-{}", method.name)
+                }));
             }
         }
         return items;

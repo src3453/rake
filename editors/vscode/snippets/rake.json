@@ -44,7 +44,35 @@
       "    $0",
       "}"
     ],
-    "description": "Declare a class with fields"
+    "description": "Declare a class with public fields"
+  },
+  "Method declaration": {
+    "prefix": "method",
+    "body": [
+      "public fn ${1:name}(${2}) {",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a public class method"
+  },
+  "Private method declaration": {
+    "prefix": "private method",
+    "body": [
+      "private fn ${1:name}(${2}) {",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a private class method"
+  },
+  "Constructor method": {
+    "prefix": "new method",
+    "body": [
+      "fn new() {",
+      "    $0",
+      "    return self",
+      "}"
+    ],
+    "description": "Declare a constructor that returns self"
   },
   "Scratch list creation": {
     "prefix": "slist",

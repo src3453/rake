@@ -149,6 +149,86 @@ mod tests {
     }
 
     #[test]
+    fn class_methods_and_visibility_are_completed_and_navigable() {
+        let text = "class Counter { public var value: int = 0 private var secret: int = 0 fn new() { return self } public fn increase(amount: int) { self.value += amount } private warp fn hidden() { self.secret += 1 } } var counter: Counter = Counter.new() counter.";
+        let completions = completion_at(text, text.len());
+        assert!(completions.iter().any(|item| item["label"] == "value"));
+        assert!(completions.iter().any(|item| item["label"] == "increase"));
+        assert!(completions.iter().any(|item| item["label"] == "new"));
+        assert!(!completions.iter().any(|item| item["label"] == "secret"));
+        assert!(!completions.iter().any(|item| item["label"] == "hidden"));
+
+        let text = "class Counter { fn new() { return self } private fn hidden() {} public fn show() { self.hidden() } } var counter: Counter = Counter.new() counter.show()";
+        let document = document(text);
+        let call_start = text.rfind("show").unwrap() as u32;
+        let definition = definition_result(
+            "file:///counter.rk",
+            &document,
+            Position {
+                line: 0,
+                character: call_start,
+            },
+        );
+        assert_eq!(
+            definition["range"]["start"]["character"],
+            text.find("show").unwrap() as u32
+        );
+        let hover = hover_result(
+            &document,
+            Position {
+                line: 0,
+                character: text.find("hidden").unwrap() as u32,
+            },
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("private fn Counter.hidden"));
+    }
+
+    #[test]
+    fn private_members_are_available_to_completion_inside_their_class() {
+        let text = "class Counter { private var secret: int = 0 private fn hidden() {} fn inspect() { self. } }";
+        let completion = completion_at(text, text.find("self.").unwrap() + "self.".len());
+        assert!(completion.iter().any(|item| item["label"] == "secret"));
+        assert!(completion.iter().any(|item| item["label"] == "hidden"));
+    }
+
+    #[test]
+    fn class_types_are_completed_highlighted_and_navigable() {
+        let completion = completion_at("class Counter {} var item: Coun", 32);
+        assert!(completion.iter().any(|item| item["label"] == "Counter"));
+
+        let text = "class Counter { fn new() { return self } } var item: Counter = Counter.new()";
+        let type_start = text.find(": Counter").unwrap() as u32 + 2;
+        assert_eq!(semantic_type_at(text, 0, type_start), Some(1));
+        let document = document(text);
+        let definition = definition_result(
+            "file:///types.rk",
+            &document,
+            Position {
+                line: 0,
+                character: type_start,
+            },
+        );
+        assert_eq!(
+            definition["range"]["start"]["character"],
+            text.find("Counter").unwrap() as u32
+        );
+        let hover = hover_result(
+            &document,
+            Position {
+                line: 0,
+                character: type_start,
+            },
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("class Counter"));
+    }
+
+    #[test]
     fn event_handlers_have_hover_and_document_symbols() {
         let text = "event greenFlag() main {}";
         let document = document(text);

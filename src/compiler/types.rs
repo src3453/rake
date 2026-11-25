@@ -10,6 +10,13 @@ enum Type {
     Class(u32),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Visibility {
+    #[default]
+    Public,
+    Private,
+}
+
 impl Type {
     fn parse(path: &str, token: &Token) -> Result<Self, String> {
         match path {
@@ -69,6 +76,7 @@ struct Symbol {
     scratch_name: String,
     ty: Type,
     mutable: bool,
+    visibility: Visibility,
     id: String,
     semantic_id: String,
     argument_id: Option<String>,
@@ -82,6 +90,7 @@ struct FieldDeclaration {
     name: String,
     ty: Type,
     mutable: bool,
+    visibility: Visibility,
     initializer: Expr,
 }
 
@@ -90,12 +99,17 @@ struct ClassInfo {
     name: String,
     id: u32,
     fields: Vec<FieldDeclaration>,
+    methods: HashMap<String, FunctionInfo>,
 }
 
 #[derive(Clone, Debug)]
 struct ObjectInstance {
     class_id: u32,
+    ordinal: u32,
+    binding: Symbol,
     fields: HashMap<String, Symbol>,
+    private_fields: std::collections::HashSet<String>,
+    methods: HashMap<String, FunctionInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -116,4 +130,8 @@ struct FunctionInfo {
     return_type: Option<Type>,
     return_symbol: Option<Symbol>,
     completed_symbol: Option<Symbol>,
+    visibility: Visibility,
+    owner_class: Option<u32>,
+    generated_method: bool,
+    receiver_object: Option<String>,
 }

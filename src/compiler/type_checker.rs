@@ -2,6 +2,7 @@ struct TypeChecker {
     scopes: Vec<HashMap<String, Symbol>>,
     symbols: Vec<Symbol>,
     scratch_names: Vec<String>,
+    reserved_source_names: std::collections::HashSet<String>,
     next_id: usize,
     functions: HashMap<String, FunctionInfo>,
     classes: HashMap<String, ClassInfo>,
@@ -9,6 +10,9 @@ struct TypeChecker {
     namespaces: std::collections::HashSet<String>,
     imports: HashMap<String, HashMap<String, String>>,
     current_function: Option<FunctionInfo>,
+    current_method_class: Option<u32>,
+    next_object_ordinal: u32,
+    used_proccodes: std::collections::HashSet<String>,
     event_names: std::collections::HashSet<String>,
 }
 
@@ -18,6 +22,7 @@ impl TypeChecker {
             scopes: vec![HashMap::new()],
             symbols: Vec::new(),
             scratch_names: Vec::new(),
+            reserved_source_names: std::collections::HashSet::new(),
             next_id: 0,
             functions: HashMap::new(),
             classes: HashMap::new(),
@@ -25,11 +30,15 @@ impl TypeChecker {
             namespaces: std::collections::HashSet::new(),
             imports: HashMap::new(),
             current_function: None,
+            current_method_class: None,
+            next_object_ordinal: 0,
+            used_proccodes: std::collections::HashSet::new(),
             event_names: std::collections::HashSet::new(),
         }
     }
 
-    fn check(mut self, statements: &mut [Stmt]) -> Result<Vec<Symbol>, String> {
+    fn check(mut self, statements: &mut Vec<Stmt>) -> Result<Vec<Symbol>, String> {
+        self.reserve_source_names(statements);
         self.collect_namespace_paths(statements)?;
         self.collect_imports(statements)?;
         self.register_classes(statements)?;

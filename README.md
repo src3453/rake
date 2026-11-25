@@ -101,21 +101,33 @@ var x: float = Scratch.Motion.xPosition()
 
 ScratchのリストはRake配列とは別の名前付き資源です。`use Scratch.Generics.List as SList` を読み込み、モジュール直下で `var inventory: SList = SList.new()` と作ります。`inventory.add()` / `inventory.get()` のようなメソッド呼び出しをScratch標準のリストブロックへ変換し、`get` は `Scratch.Generics.Value` を返します。詳細と例は [examples/scratch_lists.rk](examples/scratch_lists.rk) を参照してください。
 
-クラスは、モジュール直下で静的に宣言するインスタンスと、`int` / `float` / `bool` / `text` フィールドの読み書きを実装しています。フィールド初期値は数値、真偽値、または文字列のリテラルです。各インスタンスのフィールドは個別のStage共有変数に展開します。
+クラスは、モジュール直下で静的に宣言するインスタンス、`public` / `private` のフィールドとメソッド、`self` を使ったメソッド呼び出しを実装しています。アクセス修飾子を省略したメンバーは public です。フィールド初期値は数値、真偽値、または文字列のリテラルです。`new` は特別な生成処理ではなく、`return self` する通常のメソッドです。クラス型の変数は `var counter: Counter = Counter.new()` のように宣言します。
 
 ```text
 class Counter {
-    var value: int = 0
-    const step: int = 1
+    public var value: int = 0
+    private const step: int = 1
+
+    fn new() {
+        return self
+    }
+
+    public fn increase() {
+        self.value += self.step
+    }
+
+    private warp fn reset() {
+        self.value = 0
+    }
 }
 
-var counter = Counter()
-counter.value += counter.step
+var counter: Counter = Counter.new()
+counter.increase()
 ```
 
 複数インスタンスのフィールドが独立する例は [examples/objects.rk](examples/objects.rk) を参照してください。
 
-クラスメソッド、実行時のインスタンス生成、クラス型の明示的な型注釈、継承、配列フィールドは未対応です。インスタンス変数自体はScratch変数として出力せず、各フィールドの格納場所へLoweringします。
+クラスのインスタンス生成は静的で、モジュール直下で宣言します。コンパイラは各インスタンスのフィールドを別々のScratch変数へ割り当て、メソッドをインスタンスごとのカスタムブロックへ展開します。`private` メンバーは同じクラスのメソッド内からのみ使えます。継承と配列フィールドは未対応です。
 
 ## Scratchソース
 

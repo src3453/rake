@@ -460,37 +460,224 @@ fn instance_class_name(tokens: &[SourceToken], receiver: &str) -> Option<String>
     for (index, token) in tokens.iter().enumerate() {
         if !matches!(token.text.as_str(), "var" | "const")
             || tokens.get(index + 1).map(|token| token.text.as_str()) != Some(receiver)
-            || tokens.get(index + 2).map(|token| token.text.as_str()) != Some("=")
         {
             continue;
         }
-        let class_name = tokens.get(index + 3)?;
-        if class_name.kind == SourceTokenKind::Identifier
-            && tokens.get(index + 4).map(|token| token.text.as_str()) == Some("(")
-            && tokens.get(index + 5).map(|token| token.text.as_str()) == Some(")")
-        {
-            return Some(class_name.text.clone());
+        let mut cursor = index + 2;
+        if tokens.get(cursor).map(|token| token.text.as_str()) == Some(":") {
+            cursor += 1;
+            let mut annotated = Vec::new();
+            while let Some(token) = tokens.get(cursor) {
+                if token.kind != SourceTokenKind::Identifier {
+                    break;
+                }
+                annotated.push(token.text.clone());
+                cursor += 1;
+                if tokens.get(cursor).map(|token| token.text.as_str()) != Some(".") {
+                    break;
+                }
+                cursor += 1;
+            }
+            if tokens.get(cursor).map(|token| token.text.as_str()) != Some("=") {
+                continue;
+            }
+            return Some(annotated.join("."));
+        }
+        if tokens.get(cursor).map(|token| token.text.as_str()) != Some("=") {
+            continue;
+        }
+        cursor += 1;
+        if let Some(class_name) = class_name_from_initializer(tokens, cursor) {
+            return Some(class_name);
         }
     }
     None
 }
 
-fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String, bool)> {
+fn class_name_from_initializer(tokens: &[SourceToken], index: usize) -> Option<String> {
+    let first = tokens.get(index)?;
+    if first.kind != SourceTokenKind::Identifier {
+        return None;
+    }
+    let mut name = first.text.clone();
+    let mut cursor = index + 1;
+    loop {
+        match tokens.get(cursor).map(|token| token.text.as_str()) {
+            Some("(") => return Some(name),
+            Some(".") => {
+                let segment = tokens.get(cursor + 1)?;
+                if segment.kind != SourceTokenKind::Identifier {
+                    return None;
+                }
+                if segment.text == "new"
+                    && tokens.get(cursor + 2).map(|token| token.text.as_str()) == Some("(")
+                {
+                    return Some(name);
+                }
+                name.push('.');
+                name.push_str(&segment.text);
+                cursor += 2;
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn class_declaration_matches(tokens: &[SourceToken], class_index: usize, name: &str) -> bool {
+    let Some(class_token) = tokens.get(class_index + 1) else { return false };
+    let namespace = namespace_at_index(tokens, class_index);
+    let qualified = if namespace.is_empty() {
+        class_token.text.clone()
+    } else {
+        format!("{namespace}.{}", class_token.text)
+    };
+    if name.contains('.') {
+        qualified == name
+    } else {
+        qualified == name || class_token.text == name
+    }
+}
+
+fn declared_class_names(tokens: &[SourceToken]) -> Vec<String> {
+    tokens
+        .windows(2)
+        .filter(|pair| {
+            pair[0].text == "class" && pair[1].kind == SourceTokenKind::Identifier
+        })
+        .map(|pair| pair[1].text.clone())
+        .collect()
+}
+
+fn declared_class_paths(tokens: &[SourceToken]) -> Vec<String> {
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| {
+            if token.text != "class" {
+                return None;
+            }
+            let class_name = tokens.get(index + 1)?;
+            if class_name.kind != SourceTokenKind::Identifier {
+                return None;
+            }
+            let namespace = namespace_at_index(tokens, index);
+            Some(if namespace.is_empty() {
+                class_name.text.clone()
+            } else {
+                format!("{namespace}.{}", class_name.text)
+            })
+        })
+        .collect()
+}
+
+fn class_type_at(tokens: &[SourceToken], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else { return false };
+    if token.kind != SourceTokenKind::Identifier {
+        return false;
+    }
+    let mut start = index;
+    while start >= 2
+        && tokens[start - 1].text == "."
+        && tokens[start - 2].kind == SourceTokenKind::Identifier
+    {
+        start -= 2;
+    }
+    if start == 0 || !matches!(tokens[start - 1].text.as_str(), ":" | "->") {
+        return false;
+    }
+    let path = tokens[start..=index]
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    let classes = declared_class_paths(tokens);
+    classes.iter().any(|class_name| class_name == &path)
+        || classes
+            .iter()
+            .filter(|class_name| class_name.rsplit('.').next() == Some(token.text.as_str()))
+            .count()
+            == 1
+}
+
+fn class_body_range(tokens: &[SourceToken], class_index: usize) -> Option<(usize, usize)> {
+    let open = (class_index + 2..tokens.len()).find(|index| tokens[*index].text == "{")?;
+    let mut depth = 1usize;
+    for index in open + 1..tokens.len() {
+        match tokens[index].text.as_str() {
+            "{" => depth += 1,
+            "}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn class_at_position(tokens: &[SourceToken], position: Position) -> Option<String> {
+    let cursor = tokens.iter().position(|token| {
+        token.line > position.line
+            || (token.line == position.line && token.start_character >= position.character)
+    }).unwrap_or(tokens.len());
+    tokens.iter().enumerate().rev().find_map(|(index, token)| {
+        if token.text != "class" {
+            return None;
+        }
+        let (open, close) = class_body_range(tokens, index)?;
+        (cursor > open && cursor < close).then(|| {
+            let namespace = namespace_at_index(tokens, index);
+            if namespace.is_empty() {
+                tokens[index + 1].text.clone()
+            } else {
+                format!("{namespace}.{}", tokens[index + 1].text)
+            }
+        })
+    })
+}
+
+fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String, bool, bool)> {
     let Some(class_index) = tokens.iter().enumerate().find_map(|(index, token)| {
-        (token.text == "class"
-            && tokens.get(index + 1).map(|name| name.text.as_str()) == Some(class_name))
+        (token.text == "class" && class_declaration_matches(tokens, index, class_name))
         .then_some(index)
     }) else {
         return Vec::new();
     };
-    let Some(open_brace) = (class_index + 2..tokens.len()).find(|index| tokens[*index].text == "{")
-    else {
+    let Some((open, close)) = class_body_range(tokens, class_index) else {
         return Vec::new();
     };
     let mut fields = Vec::new();
-    let mut index = open_brace + 1;
-    while index + 3 < tokens.len() && tokens[index].text != "}" {
-        if matches!(tokens[index].text.as_str(), "var" | "const")
+    let mut index = open + 1;
+    let mut depth = 1usize;
+    while index < close {
+        match tokens[index].text.as_str() {
+            "{" => {
+                depth += 1;
+                index += 1;
+                continue;
+            }
+            "}" => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+                continue;
+            }
+            _ => {}
+        }
+        if depth != 1 {
+            index += 1;
+            continue;
+        }
+        let private = if matches!(tokens[index].text.as_str(), "public" | "private") {
+            let private = tokens[index].text == "private";
+            index += 1;
+            private
+        } else {
+            false
+        };
+        if index + 3 < close
+            && matches!(tokens[index].text.as_str(), "var" | "const")
             && tokens[index + 1].kind == SourceTokenKind::Identifier
             && tokens[index + 2].text == ":"
             && tokens[index + 3].kind == SourceTokenKind::Identifier
@@ -499,6 +686,7 @@ fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String
                 tokens[index + 1].text.clone(),
                 tokens[index + 3].text.clone(),
                 tokens[index].text == "var",
+                private,
             ));
             index += 4;
         } else {
@@ -506,6 +694,94 @@ fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String
         }
     }
     fields
+}
+
+fn class_methods(tokens: &[SourceToken], class_name: &str) -> Vec<(FunctionCompletion, bool)> {
+    let Some(class_index) = tokens.iter().enumerate().find_map(|(index, token)| {
+        (token.text == "class" && class_declaration_matches(tokens, index, class_name))
+        .then_some(index)
+    }) else {
+        return Vec::new();
+    };
+    let Some((open, close)) = class_body_range(tokens, class_index) else {
+        return Vec::new();
+    };
+    let mut methods = Vec::new();
+    let mut index = open + 1;
+    while index < close {
+        if tokens[index].text == "{" {
+            let mut depth = 1usize;
+            index += 1;
+            while index < close && depth > 0 {
+                match tokens[index].text.as_str() {
+                    "{" => depth += 1,
+                    "}" => depth -= 1,
+                    _ => {}
+                }
+                index += 1;
+            }
+            continue;
+        }
+        let private = if matches!(tokens[index].text.as_str(), "public" | "private") {
+            let private = tokens[index].text == "private";
+            index += 1;
+            private
+        } else {
+            false
+        };
+        let mut cursor = index;
+        let mut warp = false;
+        while matches!(tokens.get(cursor).map(|token| token.text.as_str()), Some("const" | "warp")) {
+            warp |= tokens[cursor].text == "warp";
+            cursor += 1;
+        }
+        if tokens.get(cursor).map(|token| token.text.as_str()) != Some("fn") {
+            index += 1;
+            continue;
+        }
+        let Some(name) = tokens.get(cursor + 1) else { break };
+        if tokens.get(cursor + 2).map(|token| token.text.as_str()) != Some("(") {
+            index += 1;
+            continue;
+        }
+        let mut parameter_cursor = cursor + 3;
+        let mut parameters = Vec::new();
+        let mut valid = true;
+        while parameter_cursor < close && tokens[parameter_cursor].text != ")" {
+            if tokens[parameter_cursor].text == "," {
+                parameter_cursor += 1;
+                continue;
+            }
+            if tokens.get(parameter_cursor + 1).map(|token| token.text.as_str()) != Some(":")
+                || tokens.get(parameter_cursor + 2).map(|token| token.kind)
+                    != Some(SourceTokenKind::Identifier)
+            {
+                valid = false;
+                break;
+            }
+            parameters.push((tokens[parameter_cursor].text.clone(), tokens[parameter_cursor + 2].text.clone()));
+            parameter_cursor += 3;
+        }
+        if valid && tokens.get(parameter_cursor).map(|token| token.text.as_str()) == Some(")") {
+            let return_type = (tokens.get(parameter_cursor + 1).map(|token| token.text.as_str()) == Some("->"))
+                .then(|| tokens.get(parameter_cursor + 2).map(|token| token.text.clone()))
+                .flatten();
+            methods.push((FunctionCompletion {
+                name: name.text.clone(),
+                qualified_name: format!("{class_name}.{}", name.text),
+                warp,
+                parameters,
+                return_type,
+            }, private));
+            index = parameter_cursor + 1;
+            while index < close && tokens[index].text != "{" {
+                index += 1;
+            }
+        } else {
+            index = cursor + 1;
+        }
+    }
+    methods
 }
 
 #[derive(Clone, Debug)]
@@ -524,6 +800,13 @@ fn function_completions(tokens: &[SourceToken]) -> Vec<FunctionCompletion> {
             || tokens.get(index + 1).map(|token| token.kind) != Some(SourceTokenKind::Identifier)
             || tokens.get(index + 2).map(|token| token.text.as_str()) != Some("(")
         {
+            continue;
+        }
+        if tokens.iter().enumerate().any(|(class_index, class_token)| {
+            class_token.text == "class"
+                && class_body_range(tokens, class_index)
+                    .is_some_and(|(open, close)| index > open && index < close)
+        }) {
             continue;
         }
         let name = tokens[index + 1].text.clone();

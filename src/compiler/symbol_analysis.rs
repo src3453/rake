@@ -23,6 +23,7 @@ fn symbol_occurrence(
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: symbol.ty == Type::ScratchList,
+        private_member: symbol.visibility == Visibility::Private,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -67,6 +68,7 @@ fn event_symbol_occurrence(
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: false,
+        private_member: false,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -99,6 +101,7 @@ fn class_symbol_occurrence(
         scratch_name: name.to_string(),
         ty: Type::Class(class_id),
         mutable: false,
+        visibility: Visibility::Public,
         id: format!("class:{name}"),
         semantic_id: format!("class:{name}"),
         argument_id: None,
@@ -129,6 +132,7 @@ fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> Symbo
         class_symbol: false,
         namespace_symbol: true,
         scratch_list: false,
+        private_member: false,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -152,7 +156,7 @@ fn function_symbol_occurrence(
         .sum::<usize>() as u32;
     SymbolOccurrence {
         symbol_id: function.symbol_id.clone(),
-        name: function.name.clone(),
+        name: function.name.rsplit('.').next().unwrap_or(&function.name).to_string(),
         ty: function.signature.clone(),
         mutable: false,
         parameter: false,
@@ -161,6 +165,7 @@ fn function_symbol_occurrence(
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: false,
+        private_member: function.visibility == Visibility::Private,
         line: (token.line - 1) as u32,
         character,
         length: token.text.encode_utf16().count() as u32,
@@ -173,25 +178,45 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
     match &expression.kind {
         ExprKind::Name {
             symbol: Some(symbol),
-            ..
-        } => output.push(symbol_occurrence(
-            source,
-            &expression.token,
-            symbol,
-            false,
-            false,
-        )),
+            value,
+        } => {
+            if value != "self" {
+                output.push(symbol_occurrence(
+                    source,
+                    &expression.token,
+                    symbol,
+                    false,
+                    false,
+                ));
+            }
+        }
         ExprKind::Unary { operand, .. } => collect_expression_symbols(source, operand, output),
         ExprKind::ObjectInit {
             class_id,
             class_name,
-        } => output.push(class_symbol_occurrence(
-            source,
-            &expression.token,
-            class_name,
-            *class_id,
-            false,
-        )),
+            class_token,
+            constructor,
+            arguments,
+        } => {
+            output.push(class_symbol_occurrence(
+                source,
+                class_token,
+                class_name,
+                *class_id,
+                false,
+            ));
+            if let Some(function) = constructor {
+                output.push(function_symbol_occurrence(
+                    source,
+                    &expression.token,
+                    function,
+                    false,
+                ));
+            }
+            for argument in arguments {
+                collect_expression_symbols(source, argument, output);
+            }
+        }
         ExprKind::Member {
             symbol: Some(symbol),
             ..
@@ -204,7 +229,10 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
         )),
         ExprKind::Member { object, .. } => collect_expression_symbols(source, object, output),
         ExprKind::Call {
-            arguments, info, ..
+            receiver,
+            arguments,
+            info,
+            ..
         } => {
             if let Some(function) = info {
                 output.push(function_symbol_occurrence(
@@ -213,6 +241,9 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
                     function,
                     false,
                 ));
+            }
+            if let Some(receiver) = receiver {
+                collect_expression_symbols(source, receiver, output);
             }
             for argument in arguments {
                 collect_expression_symbols(source, argument, output);
@@ -251,6 +282,7 @@ fn collect_statement_symbols(
                 name_token,
                 name,
                 fields,
+                methods,
             } => {
                 output.push(class_symbol_occurrence(source, name_token, name, 0, true));
                 for field in fields {
@@ -260,6 +292,7 @@ fn collect_statement_symbols(
                         scratch_name: field.name.clone(),
                         ty: field.ty,
                         mutable: field.mutable,
+                        visibility: field.visibility,
                         id: semantic_id.clone(),
                         semantic_id,
                         argument_id: None,
@@ -274,6 +307,44 @@ fn collect_statement_symbols(
                         false,
                     ));
                 }
+                for method in methods {
+                    let Stmt::Function {
+                        name_token,
+                        parameters,
+                        info: Some(function),
+                        ..
+                    } = method
+                    else {
+                        continue;
+                    };
+                    output.push(function_symbol_occurrence(
+                        source,
+                        name_token,
+                        function,
+                        true,
+                    ));
+                    for (parameter, argument) in parameters.iter().zip(&function.arguments) {
+                        let symbol = Symbol {
+                            source_name: parameter.name.clone(),
+                            scratch_name: parameter.name.clone(),
+                            ty: parameter.ty,
+                            mutable: false,
+                            visibility: Visibility::Public,
+                            id: argument.id.clone(),
+                            semantic_id: format!("{}:param:{}", function.symbol_id, argument.name),
+                            argument_id: Some(argument.id.clone()),
+                            storage: StorageClass::ProcedureArgument,
+                            initial_value: Value::Null,
+                        };
+                        output.push(symbol_occurrence(
+                            source,
+                            &parameter.token,
+                            &symbol,
+                            true,
+                            false,
+                        ));
+                    }
+                }
             }
             Stmt::Function {
                 name_token,
@@ -282,7 +353,7 @@ fn collect_statement_symbols(
                 info,
                 ..
             } => {
-                if let Some(function) = info {
+                if let Some(function) = info.as_ref().filter(|function| !function.generated_method) {
                     output.push(function_symbol_occurrence(
                         source, name_token, function, true,
                     ));
@@ -312,12 +383,16 @@ fn collect_statement_symbols(
             }
             Stmt::Call {
                 token,
+                receiver,
                 arguments,
                 info,
                 ..
             } => {
                 if let Some(function) = info {
                     output.push(function_symbol_occurrence(source, token, function, false));
+                }
+                if let Some(receiver) = receiver {
+                    collect_expression_symbols(source, receiver, output);
                 }
                 for argument in arguments {
                     collect_expression_symbols(source, argument, output);
@@ -384,6 +459,82 @@ pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
     let _ = TypeChecker::new().check(&mut statements);
     let mut occurrences = Vec::new();
     collect_statement_symbols(source, &statements, &mut occurrences);
+    let class_names = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.class_symbol && occurrence.declaration)
+        .map(|occurrence| {
+            (
+                occurrence.name.rsplit('.').next().unwrap_or(&occurrence.name).to_string(),
+                occurrence.name.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let source_tokens = source_tokens(source)?;
+    for (index, token) in source_tokens.iter().enumerate() {
+        if token.kind != SourceTokenKind::Identifier {
+            continue;
+        }
+        let mut type_start = index;
+        while type_start >= 2
+            && source_tokens[type_start - 1].text == "."
+            && source_tokens[type_start - 2].kind == SourceTokenKind::Identifier
+        {
+            type_start -= 2;
+        }
+        if type_start == 0
+            || !matches!(source_tokens[type_start - 1].text.as_str(), ":" | "->")
+        {
+            continue;
+        }
+        let type_path = source_tokens[type_start..=index]
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        let exact = class_names
+            .iter()
+            .filter(|(_, qualified)| qualified == &type_path)
+            .collect::<Vec<_>>();
+        let matching = if exact.is_empty() {
+            class_names
+                .iter()
+                .filter(|(leaf, _)| leaf == &token.text)
+                .collect::<Vec<_>>()
+        } else {
+            exact
+        };
+        if matching.len() != 1 {
+            continue;
+        }
+        let class_name = &matching[0].1;
+        let parsed_token = Token::new(
+            TokenKind::Identifier,
+            token.text.clone(),
+            token.line as usize + 1,
+            token.start_character as usize + 1,
+        );
+        let mut occurrence = class_symbol_occurrence(
+            source,
+            &parsed_token,
+            class_name,
+            0,
+            false,
+        );
+        occurrence.line = token.line;
+        occurrence.character = token.start_character;
+        occurrence.length = token.length;
+        occurrences.push(occurrence);
+    }
+    let mut seen = std::collections::HashSet::new();
+    occurrences.retain(|occurrence| {
+        seen.insert((
+            occurrence.symbol_id.clone(),
+            occurrence.line,
+            occurrence.character,
+            occurrence.declaration,
+            occurrence.modification,
+        ))
+    });
     Ok(occurrences)
 }
 

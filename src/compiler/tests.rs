@@ -357,6 +357,141 @@ event cloneStart() onClone {}
     }
 
     #[test]
+    fn class_methods_private_members_and_self_returning_new_compile() {
+        let source = r#"
+class Counter {
+    public var value: int = 0
+    private var secret: int = 1
+
+    fn new() {
+        self.secret = 2
+        return self
+    }
+
+    public fn increase(amount: int) {
+        self.value += amount
+        self.hidden()
+    }
+
+    public fn getValue() -> int {
+        return self.value
+    }
+
+    private warp fn hidden() {
+        self.secret += 1
+    }
+}
+
+var counter: Counter = Counter.new()
+counter.increase(3)
+var result: int = counter.getValue()
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let definitions = blocks
+            .values()
+            .filter(|block| block["opcode"] == "procedures_definition")
+            .collect::<Vec<_>>();
+        assert_eq!(definitions.len(), 4);
+        let proccodes = definitions
+            .iter()
+            .map(|definition| {
+                let prototype = definition["inputs"]["custom_block"][1]
+                    .as_str()
+                    .unwrap();
+                blocks[prototype]["mutation"]["proccode"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(proccodes.len(), 4);
+        assert!(
+            blocks
+                .values()
+                .any(|block| block["opcode"] == "procedures_call")
+        );
+    }
+
+    #[test]
+    fn private_class_members_are_rejected_outside_the_class() {
+        let source = "class Secret { private var value: int = 0 private fn hide() {} }\nvar secret = Secret()\nsecret.value = 1";
+        assert!(compile_source(source).unwrap_err().contains("field \"value\" is private"));
+
+        let source = "class Secret { private var value: int = 0 }\nvar secret = Secret()\nvar outside = secret.value";
+        assert!(compile_source(source).unwrap_err().contains("field \"value\" is private"));
+
+        let source = "class Secret { private fn hide() {} }\nvar secret = Secret()\nsecret.hide()";
+        assert!(compile_source(source).unwrap_err().contains("method \"hide\" is private"));
+    }
+
+    #[test]
+    fn class_instance_annotations_resolve_and_methods_are_specialized_per_instance() {
+        let source = "class Value { var count: int = 0 fn new() { return self } fn add() { self.count += 1 } }\nvar first: Value = Value.new()\nvar second: Value = Value.new()\nfirst.add()\nsecond.add()";
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let proccodes = blocks
+            .values()
+            .filter(|block| block["opcode"] == "procedures_definition")
+            .map(|definition| {
+                let prototype = definition["inputs"]["custom_block"][1]
+                    .as_str()
+                    .unwrap();
+                blocks[prototype]["mutation"]["proccode"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(proccodes.len(), 4);
+    }
+
+    #[test]
+    fn generated_field_names_avoid_later_list_resource_names() {
+        let source = "use Scratch.Generics.List as SList\nclass Entry { var score: int = 0 fn new() { return self } }\nvar entry: Entry = Entry.new()\nvar entry_score: SList = SList.new()";
+        let (project, _) = source_project(source);
+        let target = &project["targets"][0];
+        assert!(target["lists"].as_object().unwrap().values().any(|list| list[0] == "entry_score"));
+        assert!(target["variables"].as_object().unwrap().values().any(|variable| variable[0] == "entry_score_2"));
+    }
+
+    #[test]
+    fn specialized_method_custom_block_names_avoid_user_function_names() {
+        let source = "fn __rake_method_0_0_0_1() {}\nclass Entry { fn new() { return self } fn work() {} }\nvar entry: Entry = Entry.new()";
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let proccodes = blocks
+            .values()
+            .filter(|block| block["opcode"] == "procedures_definition")
+            .map(|definition| {
+                let prototype = definition["inputs"]["custom_block"][1]
+                    .as_str()
+                    .unwrap();
+                blocks[prototype]["mutation"]["proccode"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(proccodes.len(), 3);
+        assert!(proccodes.contains("__rake_method_0_0_0_1"));
+        assert!(proccodes.contains("__rake_method_0_0_0_2"));
+    }
+
+    #[test]
+    fn namespaced_classes_support_typed_instances_and_methods() {
+        let source = "ns Model { class Counter { fn new() { return self } fn increment() {} } }\nvar counter: Model.Counter = Model.Counter.new()\ncounter.increment()";
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        assert_eq!(
+            blocks
+                .values()
+                .filter(|block| block["opcode"] == "procedures_definition")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn renders_source_spanned_errors_with_ariadne() {
         let source = "// 東京\nvar score: int = 0\nif score { score = 1 }";
         let error = compile_source(source).unwrap_err();

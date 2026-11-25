@@ -75,9 +75,26 @@ impl TypeChecker {
         name_token: &Token,
     ) -> Result<(), String> {
         self.scopes.push(HashMap::new());
+        let previous_method_class = self.current_method_class;
+        if let Some(object_id) = &info.receiver_object {
+            let Some(instance) = self.objects.get(object_id) else {
+                self.scopes.pop();
+                return Err("internal error: method receiver instance is missing".to_string());
+            };
+            if parameters.iter().any(|parameter| parameter.name == "self") {
+                self.scopes.pop();
+                return Err(diagnostic(name_token, "method parameter name 'self' is reserved"));
+            }
+            self.scopes
+                .last_mut()
+                .unwrap()
+                .insert("self".to_string(), instance.binding.clone());
+            self.current_method_class = info.owner_class;
+        }
         for (parameter, argument) in parameters.iter_mut().zip(&info.arguments) {
             if self.scopes.last().unwrap().contains_key(&parameter.name) {
                 self.scopes.pop();
+                self.current_method_class = previous_method_class;
                 return Err(diagnostic(
                     &parameter.token,
                     format!("parameter {:?} is already declared", parameter.name),
@@ -88,11 +105,16 @@ impl TypeChecker {
                 scratch_name: parameter.name.clone(),
                 ty: parameter.ty,
                 mutable: false,
+                visibility: Visibility::Public,
                 id: argument.id.clone(),
                 argument_id: Some(argument.id.clone()),
                 storage: StorageClass::ProcedureArgument,
                 initial_value: Value::Null,
-                semantic_id: argument.id.clone(),
+                semantic_id: if info.owner_class.is_some() {
+                    format!("{}:param:{}", info.symbol_id, argument.name)
+                } else {
+                    argument.id.clone()
+                },
             };
             self.scopes
                 .last_mut()
@@ -103,6 +125,7 @@ impl TypeChecker {
         let previous_function = self.current_function.replace(info.clone());
         let result = self.check_statements(body, false);
         self.current_function = previous_function;
+        self.current_method_class = previous_method_class;
         self.scopes.pop();
         result?;
         if info.return_type.is_some() && !statements_return_on_all_paths(body) {
@@ -117,7 +140,9 @@ impl TypeChecker {
     fn generated_symbol(&mut self, name: String, ty: Type) -> Symbol {
         let mut scratch_name = name.clone();
         let mut suffix = 2;
-        while self.scratch_names.contains(&scratch_name) {
+        while self.scratch_names.contains(&scratch_name)
+            || self.reserved_source_names.contains(&scratch_name)
+        {
             scratch_name = format!("{name}_{suffix}");
             suffix += 1;
         }
@@ -129,6 +154,7 @@ impl TypeChecker {
             scratch_name,
             ty,
             mutable: true,
+            visibility: Visibility::Public,
             id: id.clone(),
             semantic_id: id,
             argument_id: None,
@@ -242,10 +268,24 @@ impl TypeChecker {
             Stmt::Call {
                 token,
                 name,
+                receiver,
                 arguments,
                 info,
                 builtin,
             } => {
+                if let Some(receiver_expression) = receiver.as_deref_mut() {
+                    let method_name = name.rsplit('.').next().unwrap_or(name).to_string();
+                    if let Some(method) = self.resolve_instance_method(
+                        receiver_expression,
+                        &method_name,
+                        token,
+                    )? {
+                        self.check_method_arguments(arguments, &method, token)?;
+                        *name = method.name.clone();
+                        *info = Some(method);
+                        return Ok(());
+                    }
+                }
                 if let Some((list_method, receiver)) = self.list_method_call(name, token) {
                     arguments.insert(0, receiver);
                     *name = list_method.name.to_string();
@@ -310,6 +350,9 @@ impl TypeChecker {
                 symbol,
                 object_fields: object_field_symbols,
             } => {
+                if name == "self" {
+                    return Err(diagnostic(name_token, "'self' is a reserved name"));
+                }
                 if self.scopes.last().unwrap().contains_key(name) {
                     return Err(diagnostic(
                         token,
@@ -350,6 +393,7 @@ impl TypeChecker {
                         scratch_name: name.clone(),
                         ty: Type::ScratchList,
                         mutable: *mutable,
+                        visibility: Visibility::Public,
                         id: id.clone(),
                         semantic_id: id,
                         argument_id: None,
@@ -371,17 +415,37 @@ impl TypeChecker {
                     ));
                 }
                 if let Type::Class(class_id) = initializer_type {
-                    if !matches!(&initializer.kind, ExprKind::ObjectInit { class_id: initialized, .. } if *initialized == class_id)
-                    {
+                    let (initialized_class, constructor_template, _constructor_arguments) =
+                        match &initializer.kind {
+                            ExprKind::ObjectInit {
+                                class_id: initialized,
+                                constructor,
+                                arguments,
+                                ..
+                            } if *initialized == class_id => {
+                                (*initialized, constructor.clone(), arguments.clone())
+                            }
+                            _ => {
+                                return Err(diagnostic(
+                                    &initializer.token,
+                                    "class instances must be initialized with ClassName.new() or a direct ClassName() constructor",
+                                ));
+                            }
+                        };
+                    if initialized_class != class_id {
                         return Err(diagnostic(
                             &initializer.token,
-                            "class instances must be initialized with a direct Class() constructor",
+                            "class constructor type does not match its declaration",
                         ));
                     }
-                    if annotation.is_some() {
+                    if annotation.is_some_and(|declared| declared != initializer_type) {
                         return Err(diagnostic(
-                            token,
-                            "class instance type annotations are not supported yet; use inference",
+                            name_token,
+                            format!(
+                                "cannot initialize {} with {}",
+                                annotation.unwrap().name(),
+                                initializer_type.name()
+                            ),
                         ));
                     }
                     if self.current_function.is_some() || self.scopes.len() != 1 {
@@ -408,21 +472,27 @@ impl TypeChecker {
                         scratch_name,
                         ty: initializer_type,
                         mutable: *mutable,
-                        id: format!("o:{name}"),
-                        semantic_id: format!("o:{name}"),
+                        visibility: Visibility::Public,
+                        id: format!("o:{:08x}", self.next_object_ordinal),
+                        semantic_id: format!("o:{:08x}", self.next_object_ordinal),
                         argument_id: None,
                         storage: StorageClass::ObjectBinding,
                         initial_value: Value::Null,
                     };
+                    let ordinal = self.next_object_ordinal;
+                    self.next_object_ordinal += 1;
                     let mut object_fields = HashMap::new();
                     let mut instance_fields = Vec::new();
+                    let mut private_fields = std::collections::HashSet::new();
                     for field in &class.fields {
                         let (_, initial_value) = constant_field_value(&field.initializer)
                             .expect("class field defaults validated during registration");
                         let base_name = format!("{name}_{}", field.name);
                         let mut field_scratch_name = base_name.clone();
                         let mut suffix = 2;
-                        while self.scratch_names.contains(&field_scratch_name) {
+                        while self.scratch_names.contains(&field_scratch_name)
+                            || self.reserved_source_names.contains(&field_scratch_name)
+                        {
                             field_scratch_name = format!("{base_name}_{suffix}");
                             suffix += 1;
                         }
@@ -434,6 +504,7 @@ impl TypeChecker {
                             scratch_name: field_scratch_name,
                             ty: field.ty,
                             mutable: field.mutable,
+                            visibility: field.visibility,
                             id: field_id,
                             semantic_id: format!("class:{}:field:{}", class.name, field.name),
                             argument_id: None,
@@ -443,6 +514,23 @@ impl TypeChecker {
                         self.symbols.push(field_symbol.clone());
                         instance_fields.push(field_symbol.clone());
                         object_fields.insert(field.name.clone(), field_symbol);
+                        if field.visibility == Visibility::Private {
+                            private_fields.insert(field.name.clone());
+                        }
+                    }
+                    let mut methods = HashMap::new();
+                    let mut method_names = class.methods.keys().cloned().collect::<Vec<_>>();
+                    method_names.sort();
+                    for (method_index, method_name) in method_names.iter().enumerate() {
+                        let template = class.methods.get(method_name).unwrap();
+                        let method = self.specialize_method(
+                            template,
+                            class_id,
+                            &object_symbol.id,
+                            ordinal,
+                            method_index,
+                        );
+                        methods.insert(method_name.clone(), method);
                     }
                     self.scopes
                         .last_mut()
@@ -452,9 +540,18 @@ impl TypeChecker {
                         object_symbol.id.clone(),
                         ObjectInstance {
                             class_id,
+                            ordinal,
+                            binding: object_symbol.clone(),
                             fields: object_fields,
+                            private_fields,
+                            methods,
                         },
                     );
+                    if let ExprKind::ObjectInit { constructor, .. } = &mut initializer.kind {
+                        *constructor = constructor_template.map(|_| {
+                            self.objects[&object_symbol.id].methods["new"].clone()
+                        });
+                    }
                     *symbol = Some(object_symbol);
                     *object_field_symbols = instance_fields;
                     return Ok(());
@@ -479,13 +576,25 @@ impl TypeChecker {
                 self.scratch_names.push(scratch_name.clone());
                 self.next_id += 1;
                 let symbol_id = format!("v{:019x}", self.next_id);
+                let semantic_id = self
+                    .current_function
+                    .as_ref()
+                    .filter(|function| function.generated_method)
+                    .map(|function| {
+                        format!(
+                            "{}:local:{}:{}:{}",
+                            function.symbol_id, name, name_token.line, name_token.column
+                        )
+                    })
+                    .unwrap_or_else(|| symbol_id.clone());
                 let value = Symbol {
                     source_name: name.clone(),
                     scratch_name,
                     ty: declared_type,
                     mutable: *mutable,
+                    visibility: Visibility::Public,
                     id: symbol_id.clone(),
-                    semantic_id: symbol_id,
+                    semantic_id,
                     argument_id: None,
                     storage: if self.current_function.is_none() && self.scopes.len() == 1 {
                         StorageClass::Project
@@ -555,6 +664,7 @@ impl TypeChecker {
             }
             Stmt::MemberAssign {
                 token,
+                field_token,
                 object,
                 field,
                 operator,
@@ -577,6 +687,14 @@ impl TypeChecker {
                 })?;
                 if instance.class_id != class_id {
                     return Err("internal error: class instance type mismatch".to_string());
+                }
+                if instance.private_fields.contains(field)
+                    && self.current_method_class != Some(class_id)
+                {
+                    return Err(diagnostic(
+                        &field_token,
+                        format!("field {field:?} is private"),
+                    ));
                 }
                 let resolved =
                     instance.fields.get(field).cloned().ok_or_else(|| {
