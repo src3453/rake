@@ -28,6 +28,27 @@
     ],
     "description": "Declare a class with fields"
   },
+  "Scratch list creation": {
+    "prefix": "slist",
+    "body": [
+      "use Scratch.Generics.List as SList",
+      "use Scratch.Generics.Value as SValue",
+      "",
+      "var ${1:inventory}: SList = SList.new()",
+      "$0"
+    ],
+    "description": "Create a Stage-wide Scratch list"
+  },
+  "Scratch list get": {
+    "prefix": "listget",
+    "body": "${1:inventory}.get(${2:1})",
+    "description": "Read a one-based item from a Scratch list"
+  },
+  "Scratch list set": {
+    "prefix": "listset",
+    "body": "${1:inventory}.set(${2:1}, ${3:value})",
+    "description": "Replace a one-based item in a Scratch list"
+  },
   "Namespace declaration": {
     "prefix": "ns",
     "body": [

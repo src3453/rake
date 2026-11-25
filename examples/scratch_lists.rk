@@ -1,0 +1,21 @@
+use Scratch.Generics.List as SList
+use Scratch.Generics.Value as SValue
+
+var inventory: SList = SList.new()
+
+inventory.add("red")
+inventory.add(12)
+inventory.insert(2, "blue")
+inventory.set(1, "green")
+
+var first: SValue = inventory.get(1)
+var item_count: int = inventory.length()
+var has_blue: bool = inventory.contains("blue")
+var blue_index: int = inventory.indexOf("blue")
+
+if has_blue {
+    inventory.delete(blue_index)
+}
+
+inventory.show()
+inventory.hide()

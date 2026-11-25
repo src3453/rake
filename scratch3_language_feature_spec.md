@@ -175,6 +175,8 @@ const fn main() {
 
 Scratchの数値表現・文字列表現との違いを吸収するため、型の表現と変換規則を明確に定義する。
 
+`Scratch.Generics.List` と `Scratch.Generics.Value` はScratch固有機能として扱い、`Array<T>` の別名や自動変換先にはしない。Rake配列は言語の汎用コンテナであり、Scratchリストはプロジェクト内に名前を持つ、対象に所有された可視資源である。
+
 ### 4.3 クラス・オブジェクト
 
 Smalltalkのオブジェクト指向モデルを参考にしつつ、Scratch上では静的解決を優先する。
@@ -344,7 +346,39 @@ Scratch変数へ単純に展開すると、複数イベントやクローンで�
 
 Scratchの変数スコープとクローン時の変数複製動作を踏まえて仕様化する。
 
-### 5.5 Sprite / Target 参照と呼び出し
+### 5.5 Scratch固有リスト
+
+ScratchリストはRake配列と異なる型・資源として扱う。`Scratch.Generics.List` はリストハンドルと操作を提供し、`Scratch.Generics.Value` はリスト要素として保持できるScratch値を表す。`use` で型と操作の名前空間を別名インポートできる。
+
+```rust
+use Scratch.Generics.List as SList
+use Scratch.Generics.Value as SValue
+
+var inventory: SList = SList.new()
+inventory.add("red")
+inventory.add(12)
+inventory.insert(2, "blue")
+inventory.set(1, "green")
+
+var first: SValue = inventory.get(1)
+var item_count: int = inventory.length()
+var has_blue: bool = inventory.contains("blue")
+var blue_index: int = inventory.indexOf("blue")
+
+if has_blue {
+    inventory.delete(blue_index)
+}
+
+inventory.clear()
+inventory.show()
+inventory.hide()
+```
+
+`SList.new()` はモジュール直下の変数宣言で使い、変数名をScratchリスト名としてStage共有リストを生成する。リストハンドルは再代入できず、関数の引数・戻り値やクラスフィールドには使えない。`add`、`insert`、`set`、`get`、`delete`、`clear`、`length`、`contains`、`indexOf`、`show`、`hide` は対応するScratch標準ブロックへLoweringする。`get` は `SValue` を返し、`get` / `set` / `insert` / `delete` の添字は1始まりとする。`indexOf` は不一致時に `0` を返す。
+
+この初期実装ではStage所有のリストを生成する。Sprite所有リスト、リストの初期要素、Rake配列のBackend表現は別途定義する。
+
+### 5.6 Sprite / Target 参照と呼び出し
 
 Stage と各 Sprite を独立したアクターとする。`.rks` で `.rk` ソースをターゲットに割り当てると、そのスクリプトの `self` は割り当て先アクターを表す。アクターは自分のターゲット状態を所有し、Stage と Sprite では利用できるプロパティ・メソッドが異なるため型検査で区別する。
 
@@ -653,6 +687,7 @@ Prefabはクラスそのものではなく、生成時のアセット・初期�
 -   match
 -   網羅性検査
 -   Array`<T>`{=html}
+-   `Scratch.Generics.Value` / `Scratch.Generics.List` とRake配列の意味上の分離
 -   タプル
 -   モジュール
 
@@ -700,7 +735,7 @@ Prefabはクラスそのものではなく、生成時のアセット・初期�
 8.  再帰関数を許可するか
 9.  Scratchのカスタムブロックの引数・戻り値・warp制約
 10. クローンとSoA管理を切り替える基準
-11. 文字列・配列・辞書の内部表現
+11. 文字列・Rake配列・Scratchリスト・辞書の内部表現と変換境界
 12. Mutex保持中のyieldを許可するか
 13. Scratchのwarp実行制限と長時間処理への対処
 14. Scene DSLの具体的な文法と初期化式の範囲

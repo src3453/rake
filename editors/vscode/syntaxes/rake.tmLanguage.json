@@ -2,6 +2,7 @@
   "scopeName": "source.rake",
   "patterns": [
     {"include": "#comments"},
+    {"include": "#generic-types"},
     {"include": "#namespaces"},
     {"include": "#functions"},
     {"include": "#keywords"},
@@ -16,8 +17,13 @@
     "namespaces": {
       "patterns": [
         {"name": "keyword.control.namespace.rake", "match": "\\b(ns|use|as)\\b"},
-        {"name": "support.namespace.rake", "match": "\\bScratch\\b|(?<=Scratch\\.)[A-Z][A-Za-z0-9_]*"},
+        {"name": "support.namespace.rake", "match": "\\bScratch(?:\\.[A-Z][A-Za-z0-9_]*)*"},
         {"name": "entity.name.namespace.rake", "match": "(?<=\\bns\\s)[A-Za-z_][A-Za-z0-9_]*"}
+      ]
+    },
+    "generic-types": {
+      "patterns": [
+        {"name": "storage.type.rake", "match": "\\bScratch\\.Generics\\.(Value|List)\\b"}
       ]
     },
     "functions": {
