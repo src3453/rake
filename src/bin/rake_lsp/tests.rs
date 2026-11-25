@@ -681,4 +681,85 @@ mod tests {
         assert_eq!(definition["range"]["start"]["line"], 0);
         assert_eq!(definition["range"]["start"]["character"], 7);
     }
+
+    fn scene_completion_labels(text: &str, line: u32, character: u32) -> Vec<String> {
+        let document = document(text);
+        scene_completion_items(
+            "file:///tmp/project/scenes/main.rks",
+            Some(&document),
+            &json!({"position": {"line": line, "character": character}}),
+        )
+        .iter()
+        .map(|item| item["label"].as_str().unwrap_or_default().to_string())
+        .collect()
+    }
+
+    #[test]
+    fn scene_files_get_scene_diagnostics_completion_and_symbols() {
+        assert!(is_scene_uri("file:///a/b/Main.RKS"));
+        assert!(!is_scene_uri("file:///a/b/main.rk"));
+
+        let diagnostics = scene_diagnostics("untitled:main.rks", "scene Main {
+  sprite P { speed: 1 }
+}");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0]["range"]["start"], json!({"line": 1, "character": 13}));
+        assert_eq!(diagnostics[0]["range"]["end"], json!({"line": 1, "character": 18}));
+        assert!(diagnostics[0]["message"].as_str().unwrap().contains("unknown property `speed`"));
+        assert!(scene_diagnostics("untitled:main.rks", "scene Main { sprite P { size: 50 } }").is_empty());
+
+        assert_eq!(scene_completion_labels("", 0, 0), vec!["scene"]);
+        assert_eq!(scene_completion_labels("scene Main {
+  ", 1, 2), vec!["stage", "sprite"]);
+        let sprite = scene_completion_labels("scene Main {
+  sprite P {
+    ", 2, 4);
+        assert!(sprite.contains(&"position".to_string()) && sprite.contains(&"costumes".to_string()));
+        assert!(!sprite.contains(&"backdrop".to_string()));
+        let stage = scene_completion_labels("scene Main {
+  stage {
+    size: 1
+    ", 3, 4);
+        assert!(stage.contains(&"backdrops".to_string()) && !stage.contains(&"position".to_string()));
+        assert_eq!(scene_completion_labels("scene Main { sprite P { visible: ", 0, 33), vec!["true", "false"]);
+
+        let symbols = scene_document_symbols(&document("scene Main {
+  stage {}
+  sprite Player { position: (1, 2) }
+}"));
+        assert_eq!(symbols[0]["name"], "Main");
+        assert_eq!(symbols[0]["children"][1]["name"], "Player");
+        assert_eq!(symbols[0]["children"][1]["range"]["start"], json!({"line": 2, "character": 9}));
+
+        let tokens = scene_semantic_tokens("scene Main { sprite P { size: 5 } }");
+        // scene(keyword) Main(namespace) sprite(keyword) P(type) size(variable) 5(number)
+        let kinds = tokens.chunks_exact(5).map(|token| TOKEN_TYPES[token[3] as usize]).collect::<Vec<_>>();
+        assert_eq!(kinds, vec!["keyword", "namespace", "keyword", "type", "variable", "number"]);
+    }
+
+    #[test]
+    fn scene_paths_resolve_for_hover_definition_and_completion() {
+        let root = std::env::temp_dir().join(format!("rake-lsp-scene-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scenes")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/player.rk"), "").unwrap();
+        let scene_path = root.join("scenes/main.rks");
+        let uri = path_to_uri(&scene_path);
+        assert_eq!(uri_to_path(&uri).unwrap(), scene_path);
+
+        let text = "scene Main { sprite P { scripts: [\"../src/player.rk\"] } }";
+        let definition = scene_definition(&uri, &document(text), Position { line: 0, character: 40 });
+        assert!(definition["uri"].as_str().unwrap().ends_with("/src/player.rk"), "{definition}");
+        let hover = scene_hover(&uri, &document(text), Position { line: 0, character: 40 });
+        assert!(hover["contents"]["value"].as_str().unwrap().contains("exists"));
+
+        let partial = "scene Main { sprite P { scripts: [\"";
+        let items = scene_completion_items(&uri, Some(&document(partial)), &json!({"position": {"line": 0, "character": 35}}));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["label"], "../src/player.rk");
+        assert_eq!(items[0]["textEdit"]["range"]["start"]["character"], json!(35));
+        assert!(scene_diagnostics(&uri, text).is_empty());
+        assert!(!scene_diagnostics(&uri, "scene Main { sprite P { scripts: [\"../src/none.rk\"] } }").is_empty());
+    }
 }

@@ -5,7 +5,7 @@ use std::fs::{self, File};
 #[cfg(test)]
 use std::io::Read;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(test)]
 use zip::ZipArchive;
 use zip::write::SimpleFileOptions;
@@ -41,6 +41,8 @@ include!("compiler/lowering.rs");
 include!("compiler/scratch_builder.rs");
 include!("compiler/symbol_analysis.rs");
 include!("compiler/compiler.rs");
+include!("compiler/scene.rs");
 include!("compiler/diagnostics.rs");
 include!("compiler/output.rs");
 include!("compiler/tests.rs");
+include!("compiler/scene_tests.rs");

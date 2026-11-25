@@ -38,9 +38,13 @@ fn diagnostic_for(source: &str, message: &str) -> Value {
 }
 
 fn publish_diagnostics<W: Write>(writer: &mut W, uri: &str, document: &Document) -> io::Result<()> {
-    let diagnostics = match compile_source(&document.text) {
-        Ok(_) => Vec::new(),
-        Err(message) => vec![diagnostic_for(&document.text, &message)],
+    let diagnostics = if is_scene_uri(uri) {
+        scene_diagnostics(uri, &document.text)
+    } else {
+        match compile_source(&document.text) {
+            Ok(_) => Vec::new(),
+            Err(message) => vec![diagnostic_for(&document.text, &message)],
+        }
     };
     let mut params = json!({"uri": uri, "diagnostics": diagnostics});
     if let Some(version) = document.version {

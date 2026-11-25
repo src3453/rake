@@ -1,0 +1,16 @@
+{
+  "name": "rake-ide-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local backend for the Rake IDE: projects, live builds, and the Rake language server bridge.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "monaco-editor": "0.52.2",
+    "ws": "8.18.0"
+  }
+}

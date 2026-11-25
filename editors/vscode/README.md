@@ -4,6 +4,10 @@ Syntax highlighting, snippets, compiler diagnostics, semantic highlighting, comp
 
 The language server reuses this repository's parser and type checker. It reports the first current compiler error in the open file and refreshes diagnostics as you edit. It also colors namespaces, built-in block calls, functions, classes, enums, enum variants, fields, variables, Scratch lists, and constants by semantic role; completes Scratch namespaces and supported blocks, enum variants, class fields and visible methods, and function calls; and supports hover, references, rename, document symbols, and navigation for functions, methods, classes, enums, enum variants, fields, variables, Scratch lists, and parameters.
 
+## Rake Scene files
+
+`.rks` files use the `rake-scene` language: syntax highlighting, `scene` / `stage` / `sprite` snippets, and the same language server. The server reports scene errors (unknown or mistyped properties, duplicate sprites, missing files), completes block keywords, properties for the stage or sprite under the cursor, boolean and rotation-style values, and project file paths inside `scripts`, `costumes`, `backdrops`, and `sounds` strings. Hover shows property documentation and whether a referenced file exists, Go to Definition opens referenced files, and the outline lists the scene and its sprites.
+
 ## Scratch blocks preview
 
 Open a `.rk` file and run **Rake: Open Scratch Blocks Preview** from the Command Palette, or click the preview icon in the editor title. VS Code keeps the Rake source in the editor and opens the compiled Scratch 3 blocks beside it. The preview refreshes as the source changes and shows compiler errors when the source is invalid. It is a read-only view of the generated blocks; block editing and the full Scratch stage/editor are not included yet.

@@ -1,0 +1,11 @@
+use Scratch.Events as Events
+
+var score: int = 0
+
+event Events.greenFlag {
+    score = 0
+}
+
+event scored {
+    score += 1
+}

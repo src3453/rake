@@ -151,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const command = configuredCommand || (fs.existsSync(bundledCommand) ? bundledCommand : "rake-lsp");
   const serverOptions = { command, args: [] };
   const clientOptions = {
-    documentSelector: [{ scheme: "file", language: "rake" }],
+    documentSelector: [{ scheme: "file", language: "rake" }, { scheme: "file", language: "rake-scene" }],
     outputChannelName: "Rake Language Server"
   };
 

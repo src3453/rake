@@ -1,0 +1,8 @@
+use Scratch.Motion as motion
+use Scratch.Control as control
+use Scratch.Operators as operators
+
+while true {
+    motion.goToXY(operators.random(-240,240), operators.random(-180,180))
+    control.wait(0.1)
+}

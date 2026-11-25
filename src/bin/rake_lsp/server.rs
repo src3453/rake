@@ -31,6 +31,18 @@ fn process_message<W: Write>(
                 )?;
             }
         }
+        "rake/compileScene" => {
+            if let Some(id) = id {
+                let result = match params.get("path").and_then(Value::as_str) {
+                    Some(path) => match rake::compile_scene(Path::new(path)) {
+                        Ok(compilation) => json!({"ok": true, "project": compilation.project, "blockCount": compilation.block_count}),
+                        Err(error) => json!({"ok": false, "file": error.file.to_string_lossy(), "error": error.message}),
+                    },
+                    None => json!({"ok": false, "error": "missing scene path"}),
+                };
+                send_message(writer, &json!({"jsonrpc": "2.0", "id": id, "result": result}))?;
+            }
+        }
         "initialize" => {
             if let Some(id) = id {
                 send_message(
@@ -107,7 +119,11 @@ fn process_message<W: Write>(
         }
         "textDocument/completion" => {
             if let Some(id) = id {
-                let items = completion_items(documents.get(&uri), &params);
+                let items = if is_scene_uri(&uri) {
+                    scene_completion_items(&uri, documents.get(&uri), &params)
+                } else {
+                    completion_items(documents.get(&uri), &params)
+                };
                 send_message(
                     writer,
                     &json!({
@@ -122,7 +138,13 @@ fn process_message<W: Write>(
             if let Some(id) = id {
                 let data = documents
                     .get(&uri)
-                    .map(|document| semantic_token_data(&document.text))
+                    .map(|document| {
+                        if is_scene_uri(&uri) {
+                            scene_semantic_tokens(&document.text)
+                        } else {
+                            semantic_token_data(&document.text)
+                        }
+                    })
                     .unwrap_or_default();
                 send_message(
                     writer,
@@ -140,7 +162,13 @@ fn process_message<W: Write>(
                     .get(&uri)
                     .and_then(|document| {
                         position_from_params(&params)
-                            .map(|position| definition_result(&uri, document, position))
+                            .map(|position| {
+                                if is_scene_uri(&uri) {
+                                    scene_definition(&uri, document, position)
+                                } else {
+                                    definition_result(&uri, document, position)
+                                }
+                            })
                     })
                     .unwrap_or(Value::Null);
                 send_message(
@@ -153,6 +181,7 @@ fn process_message<W: Write>(
             if let Some(id) = id {
                 let result = documents
                     .get(&uri)
+                    .filter(|_| !is_scene_uri(&uri))
                     .and_then(|document| {
                         position_from_params(&params).map(|position| {
                             let include_declaration = params
@@ -176,7 +205,13 @@ fn process_message<W: Write>(
                     .get(&uri)
                     .and_then(|document| {
                         position_from_params(&params)
-                            .map(|position| hover_result(document, position))
+                            .map(|position| {
+                                if is_scene_uri(&uri) {
+                                    scene_hover(&uri, document, position)
+                                } else {
+                                    hover_result(document, position)
+                                }
+                            })
                     })
                     .unwrap_or(Value::Null);
                 send_message(
@@ -189,7 +224,13 @@ fn process_message<W: Write>(
             if let Some(id) = id {
                 let result = documents
                     .get(&uri)
-                    .map(document_symbols)
+                    .map(|document| {
+                        if is_scene_uri(&uri) {
+                            scene_document_symbols(document)
+                        } else {
+                            document_symbols(document)
+                        }
+                    })
                     .unwrap_or_else(|| json!([]));
                 send_message(
                     writer,
@@ -199,7 +240,7 @@ fn process_message<W: Write>(
         }
         "textDocument/prepareRename" => {
             if let Some(id) = id {
-                let result = documents.get(&uri).and_then(|document| {
+                let result = documents.get(&uri).filter(|_| !is_scene_uri(&uri)).and_then(|document| {
                     let position = position_from_params(&params)?;
                     let occurrences = symbol_occurrences(document);
                     let occurrence = occurrence_at(&occurrences, position)?;
@@ -218,6 +259,7 @@ fn process_message<W: Write>(
             if let Some(id) = id {
                 let result = documents
                     .get(&uri)
+                    .filter(|_| !is_scene_uri(&uri))
                     .and_then(|document| {
                         let position = position_from_params(&params)?;
                         let new_name = params.get("newName")?.as_str()?;

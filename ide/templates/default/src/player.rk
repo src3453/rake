@@ -1,0 +1,19 @@
+use Scratch.Events as Events
+use Scratch.Motion as Motion
+
+event Events.greenFlag {
+    Motion.goToXY(0, 0)
+    Scratch.Looks.say("Press the arrow keys!")
+}
+
+event Events.keyPressed("right arrow") {
+    Motion.pointInDirection(90)
+    Motion.move(10)
+    send scored
+}
+
+event Events.keyPressed("left arrow") {
+    Motion.pointInDirection(-90)
+    Motion.move(10)
+    send scored
+}

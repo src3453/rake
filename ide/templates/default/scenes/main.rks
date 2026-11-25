@@ -1,0 +1,15 @@
+// The initial scene: the Stage, its Sprites, and the .rk scripts each one runs.
+scene Main {
+    stage {
+        backdrop: "../assets/backdrop.svg"
+        scripts: ["../src/stage.rk"]
+    }
+
+    sprite Player {
+        costume: "../assets/player.svg"
+        position: (0, 0)
+        size: 100
+        direction: 90
+        scripts: ["../src/player.rk"]
+    }
+}

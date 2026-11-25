@@ -1,0 +1,36 @@
+diff --git a/src/components/gui/gui.css b/src/components/gui/gui.css
+index ad44099..2304b5f 100644
+--- a/src/components/gui/gui.css
++++ b/src/components/gui/gui.css
+@@ -49,7 +49,9 @@
+     */
+     flex-basis: calc(1024px - 408px - (($space + $stage-standard-border-width) * 2));
+     flex-grow: 1;
+-    flex-shrink: 0;
++    /* Rake IDE: let the blocks area shrink so the code panel and the stage both fit. */
++    flex-shrink: 1;
++    min-width: 360px;
+     position: relative;
+ 
+     display: flex;
+diff --git a/src/components/gui/gui.jsx b/src/components/gui/gui.jsx
+index 30f8336..4edcdb4 100644
+--- a/src/components/gui/gui.jsx
++++ b/src/components/gui/gui.jsx
+@@ -37,6 +37,7 @@ import TWRestorePointManager from '../../containers/tw-restore-point-manager.jsx
+ import TWFontsModal from '../../containers/tw-fonts-modal.jsx';
+ import TWUnknownPlatformModal from '../../containers/tw-unknown-platform-modal.jsx';
+ import TWInvalidProjectModal from '../../containers/tw-invalid-project-modal.jsx';
++import RakeIDE from '../rake-ide/rake-ide.jsx';
+ 
+ import {STAGE_SIZE_MODES, FIXED_WIDTH, UNCONSTRAINED_NON_STAGE_WIDTH} from '../../lib/layout-constants';
+ import {resolveStageSize} from '../../lib/screen-utils';
+@@ -432,6 +433,8 @@ const GUIComponent = props => {
+                             ) : null}
+                         </Box>
+ 
++                        <RakeIDE vm={vm} />
++
+                         <Box className={classNames(styles.stageAndTargetWrapper, styles[stageSize])}>
+                             <StageWrapper
+                                 isFullScreen={isFullScreen}

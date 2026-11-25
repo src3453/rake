@@ -4,7 +4,7 @@ Scratch 3向けの静的型付きスクリプト言語コンパイラです。Ru
 
 ## ビルドと実行
 
-Rust stableとCargoを使います。Rakeのソース拡張子は `.rk` です。シーン定義には `.rks` を使う予定ですが、シーンDSLはまだ未実装です。
+Rust stableとCargoを使います。Rakeのソース拡張子は `.rk`、シーン定義（Rake Scene）の拡張子は `.rks` です。
 
 ```sh
 cargo test
@@ -15,15 +15,51 @@ cargo run --bin rake -- examples/events.rk -o outputs/events.sb3
 cargo run --bin rake -- examples/macros.rk -o outputs/macros.sb3
 cargo run --bin rake -- examples/basic.rk --emit-ir outputs/basic.ir
 cargo run --bin rake -- examples/basic.rk --emit-json outputs/basic.json
+cargo run --bin rake -- ide/templates/default/scenes/main.rks -o outputs/scene.sb3
 ```
 
 生成した `.sb3` はScratch 3エディターで開けます。`event` 宣言ごとに独立したScratchスクリプトを生成します。同じイベントやメッセージを受け取るハンドラーを複数宣言できます。イベント外に書いた実行文は、明示した`Scratch.Events.greenFlag`ハンドラーが1つあればその本体の前に連結し、なければ暗黙の緑旗スクリプトにします。
 
 `--emit-ir <path>` は型検査と関数呼び出しのLowering後にバックエンドへ渡す構文木をデバッグ用テキストとして書き出します。`--emit-json <path>` は `.sb3` に格納するプロジェクトJSONを整形して書き出します。どちらも `-o` / `--output` と併用でき、指定した出力だけを作る場合は `-o` を省略できます。例: `cargo run --bin rake -- examples/basic.rk --emit-json outputs/basic.json`
 
+## Rake IDE
+
+[ide/](ide/README.md) にTurboWarpエディターをベースにしたIDEがあります。ブロック・コードエディター（LSP対応）・ステージを並べ、編集から一定時間後に自動でコンパイルしてステージへ反映します。プロジェクト管理と、ステージとシーンファイルの相互変換を含むシーン管理もできます。
+
+## シーン（.rks）
+
+`.rks` は1つのScratchプロジェクト（Stageと複数のSprite）を宣言します。スクリプト本体は `.rk` に書き、`scripts` でどのターゲットにコンパイルするかを指定します。パスは `.rks` ファイルのあるディレクトリからの相対パスです。
+
+```rust
+scene Game {
+    stage {
+        backdrops: ["../assets/bg.svg", ("../assets/night.png", 240, 180, 2)]
+        current_backdrop: "bg"
+        scripts: ["../src/stage.rk"]
+    }
+
+    sprite Player {
+        costume: "../assets/player.svg"
+        position: (0, -40)
+        size: 100
+        direction: 90
+        visible: true
+        layer: 2
+        scripts: ["../src/player.rk"]
+        sounds: ["../assets/pop.wav"]
+    }
+}
+```
+
+Stageのプロパティは `backdrop` / `backdrops`、`current_backdrop`、`sounds`、`scripts`、`volume`、`tempo` です。Spriteのプロパティは `costume` / `costumes`、`current_costume`、`sounds`、`scripts`、`position`、`size`、`direction`、`visible`、`layer`、`draggable`、`rotation_style`（`"all around"` / `"left-right"` / `"don't rotate"`）、`volume` です。コスチュームは `"path"` か `(path, 中心X, 中心Y[, bitmapResolution])` で書き、中心を省略すると画像の中央になります。コスチュームと音の名前はファイル名（拡張子なし）で、`current_costume` には0始まりの番号か名前を指定します。対応形式は画像がSVG/PNG/JPEG/GIF/BMP、音がWAV/MP3です。コスチュームを省略したSpriteには既定の円、背景を省略したStageには白い背景を使います。`layer` が大きいほど手前に描画し、省略時は宣言順です。
+
+コンパイラーは、シーン宣言が1つだけであること、Sprite名の重複、未知のプロパティ、値の型と範囲、参照ファイルの存在を検査します。各 `.rk` は独立にコンパイルしてから割り当て先ターゲットへ結合します。複数ソースで同名のモジュール直下変数は1つのStage変数として共有し、同名のメッセージは同じbroadcastになります。同じターゲットで同名の関数（カスタムブロック）を定義すること、Spriteのローカル変数とStage変数の名前の衝突、Stageスクリプトでの動き・見た目などSprite専用ブロックの使用はエラーです。`main.rks` によるシーン遷移、Prefab、Clone定義はまだ未対応です。
+
+`--print-scene` はシーンを解析したJSONを、`--json-errors` はエラーを1行のJSONとして出力します（IDEが使用）。
+
 ## VS Code拡張
 
-`editors/vscode` に `.rk` 用のシンタックスハイライト、スニペット、コンパイラー診断、基本補完を備えた拡張機能があります。Language Serverはこのクレートのパーサーと型検査を再利用します。ビルドと起動方法は [拡張機能のREADME](editors/vscode/README.md) を参照してください。
+`editors/vscode` に `.rk` と `.rks` 用のシンタックスハイライト、スニペット、コンパイラー診断、基本補完を備えた拡張機能があります。Language Serverはこのクレートのパーサーと型検査を再利用します。ビルドと起動方法は [拡張機能のREADME](editors/vscode/README.md) を参照してください。
 
 拡張機能の **Rake: Open Scratch Blocks Preview** コマンドを使うと、VS Codeの`.rk`エディターの隣にコンパイル後のScratchブロックを表示できます。編集に合わせてプレビューが更新されます。
 
@@ -104,7 +140,7 @@ event reset {
 
 変数の格納先は宣言位置で分けます。モジュール直下の変数はScratchのStage共有変数へ、関数内や制御ブロック内の変数は実行先Spriteの変数へ割り当てます。関数引数はScratchカスタムブロック引数です。Sprite変数は呼び出しごとのフレームではないため、同じSprite上で複数のスクリプトが並行して同じ関数を使う場合のローカル状態分離は今後の対応項目です。
 
-`fn` の関数宣言と呼び出し（`int` / `float` / `bool` / `text` / enum / `Scratch.Generics.Value` の引数と戻り値）はScratchカスタムブロックへ変換します。戻り値は `fn add(a: int, b: int) -> int` のように型を宣言し、関数本体で `return a + b` と書きます。戻り値はコンパイル時に自動生成されるScratch変数へ保存され、式の中でも呼び出せます。戻り値あり関数はすべての経路で `return` が必要です。戻り値あり関数の再帰呼び出しは未対応です。Rake配列、`.rks` シーンDSL、`for` は未対応です。コンパイラは独自VMを出力せず、Scratch標準ブロックへ直接変換します。
+`fn` の関数宣言と呼び出し（`int` / `float` / `bool` / `text` / enum / `Scratch.Generics.Value` の引数と戻り値）はScratchカスタムブロックへ変換します。戻り値は `fn add(a: int, b: int) -> int` のように型を宣言し、関数本体で `return a + b` と書きます。戻り値はコンパイル時に自動生成されるScratch変数へ保存され、式の中でも呼び出せます。戻り値あり関数はすべての経路で `return` が必要です。戻り値あり関数の再帰呼び出しは未対応です。Rake配列と `for` は未対応です。コンパイラは独自VMを出力せず、Scratch標準ブロックへ直接変換します。
 
 `warp fn updateFast() { ... }` のように `fn` の前へ `warp` を付けると、そのカスタムブロックは画面を再描画せずに実行するScratchのwarpオプションを有効にします。
 

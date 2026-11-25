@@ -10,3 +10,8 @@ __pycache__/
 __MACOSX/
 *.vsix
 outputs/
+/ide/gui/scratch-gui/
+/ide/gui/*.log
+/ide/node_modules/
+/ide/server/node_modules/
+.rake-build/

@@ -1,0 +1,124 @@
+{
+  "scopeName": "source.rake-scene",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#properties"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.rake-scene",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(scene)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.scene.rake-scene"
+            },
+            "2": {
+              "name": "entity.name.namespace.scene.rake-scene"
+            }
+          }
+        },
+        {
+          "match": "\\b(sprite)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.sprite.rake-scene"
+            },
+            "2": {
+              "name": "entity.name.type.sprite.rake-scene"
+            }
+          }
+        },
+        {
+          "name": "keyword.other.stage.rake-scene",
+          "match": "\\bstage\\b"
+        }
+      ]
+    },
+    "properties": {
+      "patterns": [
+        {
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+          "captures": {
+            "1": {
+              "name": "variable.other.property.rake-scene"
+            },
+            "2": {
+              "name": "punctuation.separator.key-value.rake-scene"
+            }
+          }
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.rake-scene",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.rake-scene",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.rake-scene",
+          "match": "\\\\[nrt\"\\\\]"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.rake-scene",
+          "match": "-?\\b[0-9]+(?:\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.braces.rake-scene",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.rake-scene",
+          "match": "[\\[\\]()]"
+        },
+        {
+          "name": "punctuation.separator.rake-scene",
+          "match": "[,;]"
+        }
+      ]
+    }
+  }
+}

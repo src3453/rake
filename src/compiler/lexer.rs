@@ -59,6 +59,11 @@ fn diagnostic(token: &Token, message: impl AsRef<str>) -> String {
 }
 
 fn lex(source: &str) -> Result<Vec<Token>, String> {
+    lex_with_brackets(source, false)
+}
+
+/// `.rks` scene files additionally use `[` and `]` for lists; `.rk` sources do not.
+fn lex_with_brackets(source: &str, brackets: bool) -> Result<Vec<Token>, String> {
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
     let (mut index, mut line, mut column) = (0, 1, 1);
@@ -206,7 +211,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             column += 2;
             continue;
         }
-        if "{}():;,.+-*/<>=!".contains(current) {
+        if "{}():;,.+-*/<>=!".contains(current) || (brackets && "[]".contains(current)) {
             tokens.push(Token::new(
                 TokenKind::Symbol,
                 current.to_string(),
@@ -227,8 +232,17 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
 }
 
 pub fn source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
+    editor_tokens(source, lex(source)?)
+}
+
+/// Editor tokens for a `.rks` scene file, which also contains `[` and `]`.
+pub fn scene_source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
+    editor_tokens(source, lex_with_brackets(source, true)?)
+}
+
+fn editor_tokens(source: &str, tokens: Vec<Token>) -> Result<Vec<SourceToken>, String> {
     let mut result = Vec::new();
-    for token in lex(source)? {
+    for token in tokens {
         let kind = match token.kind {
             TokenKind::Identifier => SourceTokenKind::Identifier,
             TokenKind::Number => SourceTokenKind::Number,

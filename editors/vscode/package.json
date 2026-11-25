@@ -1,7 +1,7 @@
 {
   "name": "rake-language",
   "displayName": "Rake Language Support",
-  "description": "Rake language tools and a live Scratch blocks preview.",
+  "description": "Rake language and Rake Scene tools with a live Scratch blocks preview.",
   "version": "0.1.0",
   "publisher": "rake-language",
   "license": "MIT",
@@ -14,15 +14,32 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onLanguage:rake",
+    "onLanguage:rake-scene",
     "onCommand:rake.openScratchPreview"
   ],
   "contributes": {
     "languages": [
       {
         "id": "rake",
-        "aliases": ["Rake", "rake"],
-        "extensions": [".rk"],
+        "aliases": [
+          "Rake",
+          "rake"
+        ],
+        "extensions": [
+          ".rk"
+        ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "rake-scene",
+        "aliases": [
+          "Rake Scene",
+          "rks"
+        ],
+        "extensions": [
+          ".rks"
+        ],
+        "configuration": "./scene-language-configuration.json"
       }
     ],
     "grammars": [
@@ -30,12 +47,21 @@
         "language": "rake",
         "scopeName": "source.rake",
         "path": "./syntaxes/rake.tmLanguage.json"
+      },
+      {
+        "language": "rake-scene",
+        "scopeName": "source.rake-scene",
+        "path": "./syntaxes/rake-scene.tmLanguage.json"
       }
     ],
     "snippets": [
       {
         "language": "rake",
         "path": "./snippets/rake.json"
+      },
+      {
+        "language": "rake-scene",
+        "path": "./snippets/rake-scene.json"
       }
     ],
     "commands": [

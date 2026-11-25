@@ -1,0 +1,13 @@
+{
+  "name": "rake-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rake IDE: a TurboWarp-based Scratch editor with a Rake code editor, live compilation, and scene management.",
+  "license": "GPL-3.0-only",
+  "scripts": {
+    "setup": "node gui/setup.mjs && npm install --prefix server --no-audit --no-fund && cargo build --bins",
+    "build:gui": "node gui/setup.mjs --build",
+    "start": "cargo build --bins && node server/server.mjs",
+    "test": "npm test --prefix server"
+  }
+}

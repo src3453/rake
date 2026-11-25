@@ -1,0 +1,44 @@
+{
+  "Scene": {
+    "prefix": "scene",
+    "body": [
+      "scene ${1:Main} {",
+      "\tstage {",
+      "\t\tbackdrop: \"${2:../assets/backdrop.svg}\"",
+      "\t\tscripts: [\"${3:../src/stage.rk}\"]",
+      "\t}",
+      "",
+      "\tsprite ${4:Player} {",
+      "\t\tcostume: \"${5:../assets/player.svg}\"",
+      "\t\tposition: (0, 0)",
+      "\t\tscripts: [\"${6:../src/player.rk}\"]",
+      "\t}",
+      "}"
+    ],
+    "description": "Declare a Rake scene with a stage and a sprite"
+  },
+  "Stage": {
+    "prefix": "stage",
+    "body": [
+      "stage {",
+      "\tbackdrops: [\"${1:../assets/backdrop.svg}\"]",
+      "\tscripts: [\"${2:../src/stage.rk}\"]",
+      "}"
+    ],
+    "description": "Configure the Stage"
+  },
+  "Sprite": {
+    "prefix": "sprite",
+    "body": [
+      "sprite ${1:Name} {",
+      "\tcostumes: [\"${2:../assets/costume.svg}\"]",
+      "\tposition: (${3:0}, ${4:0})",
+      "\tsize: 100",
+      "\tdirection: 90",
+      "\tvisible: true",
+      "\tscripts: [\"${5:../src/script.rk}\"]",
+      "}"
+    ],
+    "description": "Declare a Sprite"
+  }
+}
