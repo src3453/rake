@@ -80,6 +80,16 @@ enum ExprKind {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EventKind {
+    GreenFlag,
+    KeyPressed(String),
+    BroadcastReceived(String),
+    SpriteClicked,
+    CloneStart,
+    BackdropSwitchedTo(String),
+}
+
 #[derive(Clone, Debug)]
 enum Stmt {
     Use {
@@ -103,10 +113,20 @@ enum Stmt {
     Function {
         name_token: Token,
         name: String,
+        warp: bool,
         parameters: Vec<Parameter>,
         return_type: Option<Type>,
         body: Vec<Stmt>,
         info: Option<FunctionInfo>,
+    },
+    Event {
+        type_token: Token,
+        event_type: String,
+        values: Vec<Expr>,
+        name_token: Token,
+        name: String,
+        kind: Option<EventKind>,
+        body: Vec<Stmt>,
     },
     Call {
         token: Token,
@@ -231,6 +251,17 @@ impl Parser {
         }
     }
 
+    fn function_declaration_starts_here(&self) -> bool {
+        let mut index = self.index;
+        while matches!(
+            self.tokens.get(index).map(|token| token.text.as_str()),
+            Some("const" | "warp")
+        ) {
+            index += 1;
+        }
+        self.tokens.get(index).map(|token| token.text.as_str()) == Some("fn")
+    }
+
     fn parse(&mut self) -> Result<Vec<Stmt>, String> {
         let mut statements = Vec::new();
         while self.current().kind != TokenKind::Eof {
@@ -243,10 +274,10 @@ impl Parser {
                 statements.push(self.namespace_declaration()?);
             } else if self.at("class") {
                 statements.push(self.class_declaration()?);
-            } else if self.at("fn")
-                || (self.at("const") && self.tokens[self.index + 1].text == "fn")
-            {
+            } else if self.function_declaration_starts_here() {
                 statements.push(self.function_declaration()?);
+            } else if self.at("event") {
+                statements.push(self.event_declaration()?);
             } else {
                 statements.push(self.statement()?);
             }
@@ -380,10 +411,13 @@ impl Parser {
                 body.push(self.namespace_declaration()?);
             } else if self.at("class") {
                 body.push(self.class_declaration()?);
-            } else if self.at("fn")
-                || (self.at("const") && self.tokens[self.index + 1].text == "fn")
-            {
+            } else if self.function_declaration_starts_here() {
                 body.push(self.function_declaration()?);
+            } else if self.at("event") {
+                return Err(diagnostic(
+                    self.current(),
+                    "event handlers must be declared at module scope",
+                ));
             } else {
                 self.namespace.pop();
                 return Err(diagnostic(
@@ -447,8 +481,25 @@ impl Parser {
     }
 
     fn function_declaration(&mut self) -> Result<Stmt, String> {
-        if self.at("const") {
-            self.take();
+        let mut is_const = false;
+        let mut warp = false;
+        while self.at("const") || self.at("warp") {
+            let modifier = self.take();
+            let already_present = if modifier.text == "const" {
+                let previous = is_const;
+                is_const = true;
+                previous
+            } else {
+                let previous = warp;
+                warp = true;
+                previous
+            };
+            if already_present {
+                return Err(diagnostic(
+                    &modifier,
+                    format!("duplicate function modifier {:?}", modifier.text),
+                ));
+            }
         }
         self.expect("fn")?;
         let name_token = self.expect_identifier()?;
@@ -483,10 +534,41 @@ impl Parser {
         Ok(Stmt::Function {
             name_token,
             name,
+            warp,
             parameters,
             return_type,
             body,
             info: None,
+        })
+    }
+
+    fn event_declaration(&mut self) -> Result<Stmt, String> {
+        self.expect("event")?;
+        let type_token = self.expect_identifier()?;
+        let event_type = type_token.text.clone();
+        self.expect("(")?;
+        let mut values = Vec::new();
+        if !self.at(")") {
+            loop {
+                values.push(self.expression(1)?);
+                if !self.at(",") {
+                    break;
+                }
+                self.take();
+            }
+        }
+        self.expect(")")?;
+        let name_token = self.expect_identifier()?;
+        let name = name_token.text.clone();
+        let body = self.block()?;
+        Ok(Stmt::Event {
+            type_token,
+            event_type,
+            values,
+            name_token,
+            name,
+            kind: None,
+            body,
         })
     }
 

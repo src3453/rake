@@ -4,6 +4,7 @@
     {"include": "#comments"},
     {"include": "#generic-types"},
     {"include": "#namespaces"},
+    {"include": "#events"},
     {"include": "#functions"},
     {"include": "#keywords"},
     {"include": "#types"},
@@ -40,8 +41,14 @@
       "patterns": [
         {
           "name": "keyword.control.rake",
-          "match": "\\b(var|const|class|fn|if|else|while|return)\\b"
+          "match": "\\b(var|const|class|fn|warp|event|if|else|while|return)\\b"
         }
+      ]
+    },
+    "events": {
+      "patterns": [
+        {"name": "storage.type.event.rake", "match": "(?<=\\bevent\\s)(greenFlag|keyPressed|broadcastReceived|backdropSwitchedTo|spriteClicked|cloneStart)\\b"},
+        {"name": "entity.name.function.rake", "match": "(?<=\\)\\s)[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\{)"}
       ]
     },
     "types": {

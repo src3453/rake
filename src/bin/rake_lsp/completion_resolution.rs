@@ -512,6 +512,7 @@ fn class_fields(tokens: &[SourceToken], class_name: &str) -> Vec<(String, String
 struct FunctionCompletion {
     name: String,
     qualified_name: String,
+    warp: bool,
     parameters: Vec<(String, String)>,
     return_type: Option<String>,
 }
@@ -561,6 +562,11 @@ fn function_completions(tokens: &[SourceToken]) -> Vec<FunctionCompletion> {
             functions.push(FunctionCompletion {
                 name,
                 qualified_name,
+                warp: tokens[..index]
+                    .iter()
+                    .rev()
+                    .take_while(|token| matches!(token.text.as_str(), "const" | "warp"))
+                    .any(|token| token.text == "warp"),
                 parameters,
                 return_type,
             });

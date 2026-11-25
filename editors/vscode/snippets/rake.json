@@ -18,6 +18,24 @@
     ],
     "description": "Declare a function with a typed parameter"
   },
+  "Warp function declaration": {
+    "prefix": "warp fn",
+    "body": [
+      "warp fn ${1:name}() {",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a function that runs without screen refresh"
+  },
+  "Event handler": {
+    "prefix": "event",
+    "body": [
+      "event ${1:greenFlag}() ${2:main} {",
+      "    $0",
+      "}"
+    ],
+    "description": "Declare a Scratch event handler"
+  },
   "Class declaration": {
     "prefix": "class",
     "body": [

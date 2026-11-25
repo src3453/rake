@@ -12,6 +12,37 @@ fn emit_function_definitions(
     Ok(())
 }
 
+fn has_module_runtime_statements(statements: &[Stmt]) -> bool {
+    statements.iter().any(|statement| match statement {
+        Stmt::Use { .. }
+        | Stmt::Namespace { .. }
+        | Stmt::Class { .. }
+        | Stmt::Function { .. }
+        | Stmt::Event { .. } => false,
+        Stmt::VarDecl {
+            symbol: Some(symbol),
+            object_fields,
+            ..
+        } if symbol.storage == StorageClass::ProjectList
+            || (symbol.storage == StorageClass::ObjectBinding && object_fields.is_empty()) =>
+        {
+            false
+        }
+        _ => true,
+    })
+}
+
+fn emit_green_flag_script(builder: &mut ScratchBuilder, statements: &[Stmt]) -> Result<(), String> {
+    let hat = builder.block("event_whenflagclicked", None, true, json!({}));
+    if let Some(first) = builder.sequence(statements, &hat, None)? {
+        builder.blocks.get_mut(&hat).unwrap()["next"] = json!(first);
+    } else {
+        builder.blocks.remove(&hat);
+        builder.top_level_count -= 1;
+    }
+    Ok(())
+}
+
 pub struct Compilation {
     pub project: Value,
     pub assets: Vec<(String, Vec<u8>)>,
@@ -47,9 +78,52 @@ fn compile_source_internal(
         format!("Rake IR (typed syntax tree after function-call lowering)\n{statements:#?}\n")
     });
     let mut builder = ScratchBuilder::new();
-    let hat = builder.block("event_whenflagclicked", None, true, json!({}));
-    let first = builder.sequence(&statements, &hat, None)?;
-    builder.blocks.get_mut(&hat).unwrap()["next"] = json!(first);
+    let events = statements
+        .iter()
+        .filter(|statement| matches!(statement, Stmt::Event { .. }))
+        .collect::<Vec<_>>();
+    let has_module_runtime = has_module_runtime_statements(&statements);
+    if events.is_empty() {
+        emit_green_flag_script(&mut builder, &statements)?;
+    } else if has_module_runtime {
+        let green_flags = events
+            .iter()
+            .filter(|event| matches!(event, Stmt::Event { kind: Some(EventKind::GreenFlag), .. }))
+            .collect::<Vec<_>>();
+        if green_flags.len() > 1 {
+            let Stmt::Event { type_token, .. } = green_flags[1] else {
+                unreachable!()
+            };
+            return Err(diagnostic(
+                type_token,
+                "module-level executable statements cannot be combined with multiple greenFlag handlers; move them into one handler or remove the duplicate handlers",
+            ));
+        }
+        if green_flags.is_empty() {
+            let legacy_statements = statements
+                .iter()
+                .filter(|statement| !matches!(statement, Stmt::Event { .. }))
+                .cloned()
+                .collect::<Vec<_>>();
+            emit_green_flag_script(&mut builder, &legacy_statements)?;
+        }
+        for event in events {
+            let leading = if matches!(event, Stmt::Event { kind: Some(EventKind::GreenFlag), .. }) {
+                statements
+                    .iter()
+                    .filter(|statement| !matches!(statement, Stmt::Event { .. }))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            builder.emit_event_script(event, &leading)?;
+        }
+    } else {
+        for event in events {
+            builder.emit_event_script(event, &[])?;
+        }
+    }
     emit_function_definitions(&mut builder, &statements)?;
     let block_count = builder.blocks.len();
 

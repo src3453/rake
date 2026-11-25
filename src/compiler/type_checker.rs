@@ -9,6 +9,7 @@ struct TypeChecker {
     namespaces: std::collections::HashSet<String>,
     imports: HashMap<String, HashMap<String, String>>,
     current_function: Option<FunctionInfo>,
+    event_names: std::collections::HashSet<String>,
 }
 
 impl TypeChecker {
@@ -24,6 +25,7 @@ impl TypeChecker {
             namespaces: std::collections::HashSet::new(),
             imports: HashMap::new(),
             current_function: None,
+            event_names: std::collections::HashSet::new(),
         }
     }
 

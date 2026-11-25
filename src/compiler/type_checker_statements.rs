@@ -1,4 +1,72 @@
 impl TypeChecker {
+    fn event_text_value(
+        type_token: &Token,
+        event_type: &str,
+        values: &[Expr],
+    ) -> Result<String, String> {
+        if values.len() != 1 {
+            return Err(diagnostic(
+                type_token,
+                format!(
+                    "event {event_type} expects 1 string value, got {}",
+                    values.len()
+                ),
+            ));
+        }
+        match &values[0].kind {
+            ExprKind::Text(value) => Ok(value.clone()),
+            _ => Err(diagnostic(
+                &values[0].token,
+                format!("event {event_type} value must be a string literal"),
+            )),
+        }
+    }
+
+    fn event_kind(
+        type_token: &Token,
+        event_type: &str,
+        values: &[Expr],
+    ) -> Result<EventKind, String> {
+        match event_type {
+            "greenFlag" if values.is_empty() => Ok(EventKind::GreenFlag),
+            "greenFlag" => Err(diagnostic(
+                type_token,
+                format!("event greenFlag expects no values, got {}", values.len()),
+            )),
+            "keyPressed" => Ok(EventKind::KeyPressed(Self::event_text_value(
+                type_token,
+                event_type,
+                values,
+            )?)),
+            "broadcastReceived" => Ok(EventKind::BroadcastReceived(Self::event_text_value(
+                type_token,
+                event_type,
+                values,
+            )?)),
+            "backdropSwitchedTo" => Ok(EventKind::BackdropSwitchedTo(Self::event_text_value(
+                type_token,
+                event_type,
+                values,
+            )?)),
+            "spriteClicked" if values.is_empty() => Ok(EventKind::SpriteClicked),
+            "spriteClicked" => Err(diagnostic(
+                type_token,
+                format!("event spriteClicked expects no values, got {}", values.len()),
+            )),
+            "cloneStart" if values.is_empty() => Ok(EventKind::CloneStart),
+            "cloneStart" => Err(diagnostic(
+                type_token,
+                format!("event cloneStart expects no values, got {}", values.len()),
+            )),
+            _ => Err(diagnostic(
+                type_token,
+                format!(
+                    "unknown event type {event_type:?}; expected greenFlag, keyPressed, broadcastReceived, backdropSwitchedTo, spriteClicked, or cloneStart"
+                ),
+            )),
+        }
+    }
+
     fn check_function(
         &mut self,
         parameters: &mut [Parameter],
@@ -129,6 +197,25 @@ impl TypeChecker {
             Stmt::Use { .. } | Stmt::Namespace { .. } => Ok(()),
             Stmt::Class { .. } => Ok(()),
             Stmt::Function { .. } => Ok(()),
+            Stmt::Event {
+                name_token,
+                name,
+                type_token,
+                event_type,
+                values,
+                kind,
+                body,
+                ..
+            } => {
+                if !self.event_names.insert(name.clone()) {
+                    return Err(diagnostic(
+                        name_token,
+                        format!("event handler {name:?} is already declared"),
+                    ));
+                }
+                *kind = Some(Self::event_kind(type_token, event_type, values)?);
+                self.check_statements(body, true)
+            }
             Stmt::Return { token, value } => {
                 let Some(function) = self.current_function.clone() else {
                     return Err(diagnostic(token, "return is only valid inside a function"));

@@ -91,6 +91,7 @@ impl TypeChecker {
             let Stmt::Function {
                 name_token,
                 name,
+                warp,
                 parameters,
                 return_type,
                 info,
@@ -163,12 +164,14 @@ impl TypeChecker {
                 self.symbols.push(symbol.clone());
                 symbol
             });
+            let function_keyword = if *warp { "warp fn" } else { "fn" };
             let signature = match return_type {
-                Some(ty) => format!("fn {name}({signature_arguments}) -> {}", ty.name()),
-                None => format!("fn {name}({signature_arguments})"),
+                Some(ty) => format!("{function_keyword} {name}({signature_arguments}) -> {}", ty.name()),
+                None => format!("{function_keyword} {name}({signature_arguments})"),
             };
             let function_info = FunctionInfo {
                 name: name.clone(),
+                warp: *warp,
                 symbol_id: format!("f{:019x}", *function_index + 1),
                 signature,
                 proccode,

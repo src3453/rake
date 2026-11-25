@@ -37,12 +37,21 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
                 Some(types["type"])
             }
             SourceTokenKind::Identifier
+                if token_index > 0
+                    && tokens[token_index - 1].text == "event"
+                    && tokens.get(token_index + 1).is_some_and(|next| next.text == "(") =>
+            {
+                Some(types["type"])
+            }
+            SourceTokenKind::Identifier
                 if matches!(
                     token.text.as_str(),
                     "var"
                         | "const"
                         | "class"
                         | "fn"
+                        | "warp"
+                        | "event"
                         | "ns"
                         | "use"
                         | "as"
@@ -90,7 +99,7 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             SourceTokenKind::Identifier
                 if occurrence_by_position
                     .get(&(token.line, token.start_character))
-                    .map(|occurrence| occurrence.function)
+                    .map(|occurrence| occurrence.function || occurrence.event_handler)
                     .unwrap_or(false) =>
             {
                 Some(types["function"])

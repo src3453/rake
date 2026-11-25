@@ -2,6 +2,7 @@ struct ScratchBuilder {
     blocks: Map<String, Value>,
     broadcasts: Map<String, Value>,
     next_id: usize,
+    top_level_count: usize,
 }
 
 impl ScratchBuilder {
@@ -10,6 +11,7 @@ impl ScratchBuilder {
             blocks: Map::new(),
             broadcasts: Map::new(),
             next_id: 0,
+            top_level_count: 0,
         }
     }
     fn next_id(&mut self) -> String {
@@ -43,8 +45,9 @@ impl ScratchBuilder {
             "shadow": false, "topLevel": top_level,
         });
         if top_level {
+            self.top_level_count += 1;
             block["x"] = json!(24);
-            block["y"] = json!(24);
+            block["y"] = json!(24 + (self.top_level_count - 1) * 120);
         }
         self.blocks.insert(id.clone(), block);
         id
@@ -52,6 +55,40 @@ impl ScratchBuilder {
 
     fn input(&mut self, block_id: &str, name: &str, value: Value) {
         self.blocks.get_mut(block_id).unwrap()["inputs"][name] = value;
+    }
+
+    fn emit_event_script(&mut self, event: &Stmt, leading: &[Stmt]) -> Result<(), String> {
+        let Stmt::Event {
+            kind: Some(kind), body, ..
+        } = event
+        else {
+            return Err("internal error: unresolved event declaration".to_string());
+        };
+        let mut fields = Map::new();
+        let opcode = match kind {
+            EventKind::GreenFlag => "event_whenflagclicked",
+            EventKind::KeyPressed(key) => {
+                fields.insert("KEY_OPTION".to_string(), json!([key, null]));
+                "event_whenkeypressed"
+            }
+            EventKind::BroadcastReceived(message) => {
+                let id = self.broadcast_id(message);
+                fields.insert("BROADCAST_OPTION".to_string(), json!([message, id]));
+                "event_whenbroadcastreceived"
+            }
+            EventKind::SpriteClicked => "event_whenthisspriteclicked",
+            EventKind::CloneStart => "control_start_as_clone",
+            EventKind::BackdropSwitchedTo(backdrop) => {
+                fields.insert("BACKDROP".to_string(), json!([backdrop, null]));
+                "event_whenbackdropswitchesto"
+            }
+        };
+        let hat = self.block(opcode, None, true, Value::Object(fields));
+        let mut script_body = leading.to_vec();
+        script_body.extend(body.iter().cloned());
+        let first = self.sequence(&script_body, &hat, None)?;
+        self.blocks.get_mut(&hat).unwrap()["next"] = json!(first);
+        Ok(())
     }
 
     fn emit_builtin(
@@ -141,6 +178,7 @@ impl ScratchBuilder {
             if matches!(
                 statement,
                 Stmt::Function { .. }
+                    | Stmt::Event { .. }
                     | Stmt::Class { .. }
                     | Stmt::Namespace { .. }
                     | Stmt::Use { .. }
@@ -221,7 +259,7 @@ impl ScratchBuilder {
             "argumentids": serde_json::to_string(&argument_ids).unwrap(),
             "argumentnames": serde_json::to_string(&argument_names).unwrap(),
             "argumentdefaults": serde_json::to_string(&argument_defaults).unwrap(),
-            "warp": "false"
+            "warp": if info.warp { "true" } else { "false" }
         })
     }
 
@@ -749,6 +787,7 @@ pub struct SymbolOccurrence {
     pub mutable: bool,
     pub parameter: bool,
     pub function: bool,
+    pub event_handler: bool,
     pub class_symbol: bool,
     pub namespace_symbol: bool,
     pub scratch_list: bool,

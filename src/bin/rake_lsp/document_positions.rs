@@ -109,7 +109,7 @@ fn visible_declarations<'a>(
 
     for occurrence in occurrences
         .iter()
-        .filter(|entry| entry.declaration && !entry.function)
+        .filter(|entry| entry.declaration && !entry.function && !entry.event_handler)
     {
         let token_index = match tokens.iter().position(|token| {
             token.line == occurrence.line

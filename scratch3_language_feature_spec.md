@@ -140,7 +140,7 @@ const fn main() {
 -   `async fn` / `spawn`: 協調実行タスク
 -   `command fn` / `send`: アクター間の非同期メッセージ
 -   `await`: Channel 等の非同期結果を待つ
--   `warp`: Scratchのカスタムブロックのwarp実行を明示する
+-   `warp fn`: 関数に指定するとScratchのカスタムブロックのwarp実行を有効にする
 
 命名規約は推奨スタイルとして次を採用する。コンパイラーは規約違反だけを理由にエラーにせず、必要に応じてFormatterやLintで案内する。
 

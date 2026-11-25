@@ -1,0 +1,12 @@
+event greenFlag() main {
+    Scratch.Looks.say("Ready")
+    Scratch.Events.broadcast("begin")
+}
+
+event keyPressed("space") onSpace {
+    Scratch.Looks.say("Space pressed")
+}
+
+event broadcastReceived("begin") onBegin {
+    Scratch.Looks.say("Started")
+}

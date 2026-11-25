@@ -19,6 +19,7 @@ fn symbol_occurrence(
         mutable: symbol.mutable,
         parameter: symbol.argument_id.is_some(),
         function: false,
+        event_handler: false,
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: symbol.ty == Type::ScratchList,
@@ -27,6 +28,50 @@ fn symbol_occurrence(
         length: token.text.encode_utf16().count() as u32,
         declaration,
         modification,
+    }
+}
+
+fn event_symbol_occurrence(
+    source: &str,
+    token: &Token,
+    name: &str,
+    kind: &EventKind,
+) -> SymbolOccurrence {
+    let line_text = source.split('\n').nth(token.line - 1).unwrap_or("");
+    let character = line_text
+        .trim_end_matches('\r')
+        .chars()
+        .take(token.column - 1)
+        .map(char::len_utf16)
+        .sum::<usize>() as u32;
+    let signature = match kind {
+        EventKind::GreenFlag => "event greenFlag()".to_string(),
+        EventKind::KeyPressed(key) => format!("event keyPressed({key:?})"),
+        EventKind::BroadcastReceived(message) => {
+            format!("event broadcastReceived({message:?})")
+        }
+        EventKind::SpriteClicked => "event spriteClicked()".to_string(),
+        EventKind::CloneStart => "event cloneStart()".to_string(),
+        EventKind::BackdropSwitchedTo(backdrop) => {
+            format!("event backdropSwitchedTo({backdrop:?})")
+        }
+    };
+    SymbolOccurrence {
+        symbol_id: format!("event:{name}"),
+        name: name.to_string(),
+        ty: signature,
+        mutable: false,
+        parameter: false,
+        function: false,
+        event_handler: true,
+        class_symbol: false,
+        namespace_symbol: false,
+        scratch_list: false,
+        line: (token.line - 1) as u32,
+        character,
+        length: token.text.encode_utf16().count() as u32,
+        declaration: true,
+        modification: false,
     }
 }
 
@@ -80,6 +125,7 @@ fn namespace_symbol_occurrence(source: &str, token: &Token, path: &str) -> Symbo
         mutable: false,
         parameter: false,
         function: false,
+        event_handler: false,
         class_symbol: false,
         namespace_symbol: true,
         scratch_list: false,
@@ -111,6 +157,7 @@ fn function_symbol_occurrence(
         mutable: false,
         parameter: false,
         function: true,
+        event_handler: false,
         class_symbol: false,
         namespace_symbol: false,
         scratch_list: false,
@@ -251,6 +298,16 @@ fn collect_statement_symbols(
                         ));
                     }
                 }
+                collect_statement_symbols(source, body, output);
+            }
+            Stmt::Event {
+                name_token,
+                name,
+                kind: Some(kind),
+                body,
+                ..
+            } => {
+                output.push(event_symbol_occurrence(source, name_token, name, kind));
                 collect_statement_symbols(source, body, output);
             }
             Stmt::Call {

@@ -69,7 +69,11 @@
     }
     const table = {
       event_whenflagclicked: [t("⚑ when green flag clicked")],
-      event_whenkeypressed: [t("when"), f("KEYOPTION"), t("key pressed")],
+      event_whenkeypressed: [t("when"), f("KEY_OPTION"), t("key pressed")],
+      event_whenbroadcastreceived: [t("when I receive"), f("BROADCAST_OPTION")],
+      event_whenbackdropswitchesto: [t("when backdrop switches to"), f("BACKDROP")],
+      event_whenthisspriteclicked: [t("when this sprite clicked")],
+      control_start_as_clone: [t("when I start as a clone")],
       data_setvariableto: [t("set"), f("VARIABLE"), t("to"), i("VALUE")],
       data_changevariableby: [t("change"), f("VARIABLE"), t("by"), i("VALUE")],
       control_if: [t("if"), i("CONDITION"), t("then")],
@@ -101,7 +105,10 @@
     branchSeen.add(id);
     const node = document.createElement("div");
     const boolean = ["operator_gt", "operator_lt", "operator_equals", "operator_and", "operator_or", "operator_not"].includes(block.opcode);
-    const shape = mode === "reporter" ? (boolean ? "boolean" : "reporter") : (block.opcode.startsWith("event_") ? "hat" : block.opcode.startsWith("control_") ? "control" : "statement");
+    const hat = block.opcode.startsWith("event_") || block.opcode === "control_start_as_clone";
+    const shape = mode === "reporter"
+      ? (boolean ? "boolean" : "reporter")
+      : (hat ? "hat" : block.opcode.startsWith("control_") ? "control" : "statement");
     node.className = `block ${shape} ${category(block.opcode)}`;
     for (const part of parts(block, blocks)) {
       if (part.kind === "text") {

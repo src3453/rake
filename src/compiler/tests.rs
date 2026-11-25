@@ -33,6 +33,145 @@ mod tests {
     }
 
     #[test]
+    fn warp_functions_disable_screen_refresh_on_custom_blocks() {
+        let (project, _) = source_project("warp fn fast() {}\nfn normal() {}");
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let warp_values: Vec<_> = blocks
+            .values()
+            .filter(|block| block["opcode"] == "procedures_definition")
+            .map(|definition| {
+                let prototype = definition["inputs"]["custom_block"][1]
+                    .as_str()
+                    .unwrap();
+                (
+                    blocks[prototype]["mutation"]["proccode"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    blocks[prototype]["mutation"]["warp"]
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(warp_values.len(), 2);
+        assert!(warp_values.contains(&("fast".to_string(), "true".to_string())));
+        assert!(warp_values.contains(&("normal".to_string(), "false".to_string())));
+    }
+
+    #[test]
+    fn emits_independent_scratch_event_scripts() {
+        let source = r#"
+event greenFlag() main {
+    Scratch.Looks.say("start")
+}
+event keyPressed("space") onSpace {
+    Scratch.Looks.say("space")
+}
+event broadcastReceived("reset") onReset {
+    Scratch.Looks.say("reset")
+}
+event backdropSwitchedTo("backdrop1") onBackdrop {
+    Scratch.Looks.say("backdrop")
+}
+event spriteClicked() onClick {}
+event cloneStart() onClone {}
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let hats: Vec<_> = blocks
+            .values()
+            .filter(|block| block["topLevel"] == true)
+            .collect();
+        assert_eq!(hats.len(), 6);
+
+        let by_opcode = |opcode: &str| {
+            hats.iter()
+                .find(|block| block["opcode"] == opcode)
+                .copied()
+                .unwrap_or_else(|| panic!("missing event hat {opcode}"))
+        };
+        let green_flag = by_opcode("event_whenflagclicked");
+        assert!(!green_flag["next"].is_null());
+        let key = by_opcode("event_whenkeypressed");
+        assert_eq!(key["fields"]["KEY_OPTION"][0], "space");
+        assert!(!key["next"].is_null());
+        let broadcast = by_opcode("event_whenbroadcastreceived");
+        assert_eq!(broadcast["fields"]["BROADCAST_OPTION"][0], "reset");
+        let broadcast_id = project["targets"][0]["broadcasts"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(_, value)| *value == "reset")
+            .unwrap()
+            .0;
+        assert_eq!(
+            broadcast["fields"]["BROADCAST_OPTION"][1].as_str(),
+            Some(broadcast_id.as_str())
+        );
+        let backdrop = by_opcode("event_whenbackdropswitchesto");
+        assert_eq!(backdrop["fields"]["BACKDROP"][0], "backdrop1");
+        by_opcode("event_whenthisspriteclicked");
+        by_opcode("control_start_as_clone");
+
+        let mut y_coordinates: Vec<_> = hats
+            .iter()
+            .map(|block| block["y"].as_i64().unwrap())
+            .collect();
+        y_coordinates.sort_unstable();
+        y_coordinates.dedup();
+        assert_eq!(y_coordinates.len(), hats.len());
+    }
+
+    #[test]
+    fn merges_module_runtime_statements_into_single_explicit_green_flag() {
+        let (project, _) = source_project(
+            "var score: int = 0\nevent greenFlag() main { score += 1 }",
+        );
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let hats: Vec<_> = blocks
+            .values()
+            .filter(|block| block["topLevel"] == true)
+            .collect();
+        assert_eq!(hats.len(), 1);
+        assert_eq!(hats[0]["opcode"], "event_whenflagclicked");
+        let first = hats[0]["next"].as_str().unwrap();
+        assert_eq!(blocks[first]["opcode"], "data_setvariableto");
+        let second = blocks[first]["next"].as_str().unwrap();
+        assert_eq!(blocks[second]["opcode"], "data_setvariableto");
+        assert!(compile_source(
+            "var score: int = 0\nevent greenFlag() main {}\nevent greenFlag() secondary {}"
+        )
+        .unwrap_err()
+        .contains("multiple greenFlag handlers"));
+    }
+
+    #[test]
+    fn validates_event_types_values_and_handler_names() {
+        assert!(compile_source("event unknown() main {}")
+            .unwrap_err()
+            .contains("unknown event type"));
+        assert!(compile_source("event greenFlag(1) main {}")
+            .unwrap_err()
+            .contains("expects no values"));
+        assert!(compile_source("event keyPressed(1) onSpace {}")
+            .unwrap_err()
+            .contains("value must be a string literal"));
+        assert!(compile_source("event greenFlag() main {}\nevent spriteClicked() main {}")
+            .unwrap_err()
+            .contains("event handler \"main\" is already declared"));
+        assert!(compile_source("ns Game { event greenFlag() main {} }")
+            .unwrap_err()
+            .contains("must be declared at module scope"));
+    }
+
+    #[test]
+    fn compiles_the_documented_event_example() {
+        source_project(include_str!("../../examples/events.rk"));
+    }
+
+    #[test]
     fn rejects_const_assignment_and_non_boolean_conditions() {
         assert!(
             compile_source("const score: int = 0\nscore = 1")

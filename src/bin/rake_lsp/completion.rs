@@ -10,6 +10,55 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
     let type_context = is_type_context(&tokens, position, &prefix);
     let member_receiver = member_receiver_at(&tokens, position, &prefix);
 
+    if event_type_context(&tokens, position, &prefix) {
+        let event_types = [
+            (
+                "greenFlag",
+                "Run when the green flag is clicked",
+                "greenFlag() ${1:main} {\n\t$0\n}",
+            ),
+            (
+                "keyPressed",
+                "Run when a key is pressed",
+                "keyPressed(\"${1:space}\") ${2:onSpace} {\n\t$0\n}",
+            ),
+            (
+                "broadcastReceived",
+                "Run when a broadcast is received",
+                "broadcastReceived(\"${1:message}\") ${2:onMessage} {\n\t$0\n}",
+            ),
+            (
+                "backdropSwitchedTo",
+                "Run when the backdrop switches to a name",
+                "backdropSwitchedTo(\"${1:backdrop1}\") ${2:onBackdrop} {\n\t$0\n}",
+            ),
+            (
+                "spriteClicked",
+                "Run when this sprite is clicked",
+                "spriteClicked() ${1:onClick} {\n\t$0\n}",
+            ),
+            (
+                "cloneStart",
+                "Run when this clone starts",
+                "cloneStart() ${1:onCloneStart} {\n\t$0\n}",
+            ),
+        ];
+        return event_types
+            .iter()
+            .filter(|(name, _, _)| name.starts_with(&prefix))
+            .map(|(name, detail, insert_text)| {
+                json!({
+                    "label": name,
+                    "kind": 14,
+                    "detail": detail,
+                    "insertText": insert_text,
+                    "insertTextFormat": 2,
+                    "sortText": format!("0-{name}")
+                })
+            })
+            .collect();
+    }
+
     if type_context {
         if let Some(receiver) = qualified_receiver_at(&tokens, position, &prefix) {
             let namespace =
@@ -138,8 +187,10 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ("else", 14, "Alternative branch"),
             ("while", 14, "Loop statement"),
             ("fn", 14, "Function declaration"),
+            ("warp", 14, "Declare a function that runs without screen refresh"),
             ("ns", 14, "Namespace declaration"),
             ("use", 14, "Import a namespace or declaration"),
+            ("event", 14, "Declare a Scratch event handler"),
             ("Scratch", 9, "Scratch built-in namespaces"),
             ("return", 14, "Return a value from a function"),
             ("true", 14, "Boolean literal"),
@@ -152,7 +203,14 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 "label": label,
                 "kind": kind,
                 "detail": detail,
-                "insertText": label,
+                "insertText": if label == "event" {
+                    "event ${1:greenFlag}() ${2:main} {\n\t$0\n}"
+                } else if label == "warp" {
+                    "warp fn ${1:name}() {\n\t$0\n}"
+                } else {
+                    label
+                },
+                "insertTextFormat": if label == "event" || label == "warp" { 2 } else { 1 },
                 "sortText": format!("0-{label}")
             }));
         }
@@ -237,8 +295,9 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 .as_ref()
                 .map(|ty| format!(" -> {ty}"))
                 .unwrap_or_default();
+            let function_keyword = if function.warp { "warp fn" } else { "fn" };
             let detail = format!(
-                "fn {}({signature}){return_annotation}",
+                "{function_keyword} {}({signature}){return_annotation}",
                 function.qualified_name
             );
             let insert_text = if declaration_context {
@@ -294,10 +353,11 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 .map(|(index, (name, _))| format!("${{{}:{name}}}", index + 1))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let function_keyword = if function.warp { "warp fn" } else { "fn" };
             items.push(json!({
                 "label": local_name,
                 "kind": 3,
-                "detail": format!("fn {}({signature}){return_type}", function.qualified_name),
+                "detail": format!("{function_keyword} {}({signature}){return_type}", function.qualified_name),
                 "insertText": format!("{}({arguments})", local_name),
                 "insertTextFormat": 2,
                 "sortText": format!("0-{local_name}")

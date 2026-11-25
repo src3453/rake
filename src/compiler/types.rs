@@ -108,6 +108,7 @@ struct FunctionArgument {
 #[derive(Clone, Debug)]
 struct FunctionInfo {
     name: String,
+    warp: bool,
     symbol_id: String,
     signature: String,
     proccode: String,

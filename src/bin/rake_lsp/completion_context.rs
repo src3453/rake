@@ -41,6 +41,20 @@ fn is_type_context(tokens: &[SourceToken], position: Position, prefix: &str) -> 
         .all(|token| token.kind == SourceTokenKind::Identifier || token.text == ".")
 }
 
+fn event_type_context(tokens: &[SourceToken], position: Position, prefix: &str) -> bool {
+    let prefix_start = Position {
+        line: position.line,
+        character: position
+            .character
+            .saturating_sub(prefix.encode_utf16().count() as u32),
+    };
+    tokens
+        .iter()
+        .filter(|token| end_position(token) <= prefix_start)
+        .next_back()
+        .is_some_and(|token| token.text == "event")
+}
+
 fn member_receiver_at(tokens: &[SourceToken], position: Position, prefix: &str) -> Option<String> {
     let prefix_start = Position {
         line: position.line,

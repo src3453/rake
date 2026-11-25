@@ -69,6 +69,9 @@ fn lower_statement_list(
             Stmt::Function { body, .. } => {
                 lower_statement_list(body, symbols, allocator)?;
             }
+            Stmt::Event { body, .. } => {
+                lower_statement_list(body, symbols, allocator)?;
+            }
             Stmt::Call { arguments, .. } => {
                 for argument in arguments {
                     lower_expression(argument, &mut before, symbols, allocator)?;

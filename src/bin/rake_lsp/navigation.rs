@@ -103,8 +103,9 @@ fn hover_result(document: &Document, position: Position) -> Value {
                 .as_ref()
                 .map(|ty| format!(" -> {ty}"))
                 .unwrap_or_default();
+            let function_keyword = if function.warp { "warp fn" } else { "fn" };
             let signature = format!(
-                "fn {}({signature_arguments}){return_type}",
+                "{function_keyword} {}({signature_arguments}){return_type}",
                 function.qualified_name
             );
             return json!({
@@ -120,7 +121,12 @@ fn hover_result(document: &Document, position: Position) -> Value {
     let Some(occurrence) = occurrence_at(&occurrences, position) else {
         return Value::Null;
     };
-    let (signature, description) = if occurrence.namespace_symbol {
+    let (signature, description) = if occurrence.event_handler {
+        (
+            occurrence.ty.clone(),
+            "Scratch event handler; its body runs as an independent script.",
+        )
+    } else if occurrence.namespace_symbol {
         (
             format!("ns {}", occurrence.name),
             "Namespace containing declarations.",
@@ -176,7 +182,7 @@ fn document_symbols(document: &Document) -> Value {
             json!({
                 "name": occurrence.name,
                 "detail": occurrence.ty,
-                "kind": if occurrence.namespace_symbol { 3 } else if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter || occurrence.scratch_list { 13 } else { 14 },
+                "kind": if occurrence.event_handler { 24 } else if occurrence.namespace_symbol { 3 } else if occurrence.class_symbol { 5 } else if occurrence.function { 12 } else if occurrence.mutable || occurrence.parameter || occurrence.scratch_list { 13 } else { 14 },
                 "range": range,
                 "selectionRange": range
             })
@@ -200,6 +206,8 @@ fn valid_identifier(name: &str) -> bool {
                 | "scratch"
                 | "list"
                 | "fn"
+                | "warp"
+                | "event"
                 | "ns"
                 | "use"
                 | "as"

@@ -46,6 +46,7 @@ fn collect_statement_calls(statements: &[Stmt], calls: &mut Vec<String>) {
             Stmt::Namespace { body, .. } => collect_statement_calls(body, calls),
             Stmt::Class { .. } => {}
             Stmt::Function { body, .. } => collect_statement_calls(body, calls),
+            Stmt::Event { body, .. } => collect_statement_calls(body, calls),
             Stmt::Call {
                 name, arguments, ..
             } => {
