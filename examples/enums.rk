@@ -1,0 +1,31 @@
+enum GameState {
+    Title,
+    Playing,
+    Paused,
+    GameOver,
+}
+
+fn nextState(current: GameState) -> GameState {
+    if current == GameState.Title {
+        return GameState.Playing
+    }
+    if current == GameState.Playing {
+        return GameState.Paused
+    }
+    if current == GameState.Paused {
+        return GameState.GameOver
+    }
+    return GameState.Title
+}
+
+var state: GameState = GameState.Title
+
+if state == GameState.Title {
+    Scratch.Looks.say("Press the green flag to advance the game state")
+}
+
+state = nextState(state)
+
+if state == GameState.Playing {
+    Scratch.Looks.say("Playing")
+}

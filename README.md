@@ -64,6 +64,7 @@ if state == GameState.Playing {
 ```
 
 enum 定数はクラスのフィールド初期値にも使えます。ペイロード付き variant と `match` はまだ未対応です。
+実行例は [examples/enums.rk](examples/enums.rk) を参照してください。
 
 ## イベント
 
