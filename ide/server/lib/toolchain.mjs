@@ -97,6 +97,21 @@ export class Toolchain {
         });
     }
 
+    /**
+     * Decompile an .sb3 into a new Rake project directory (experimental).
+     * Resolves to {ok: true, warnings} or {ok: false, error}.
+     */
+    async decompile (sb3Path, outputDirectory) {
+        const result = await run(this.rake, ['decompile', sb3Path, '-o', outputDirectory], path.dirname(sb3Path));
+        const lines = result.stderr.split(/\r?\n/);
+        const warnings = lines.filter(line => line.startsWith('warning: ')).map(line => line.slice('warning: '.length));
+        if (result.code !== 0) {
+            const errors = lines.filter(line => line.startsWith('error: ')).map(line => line.slice('error: '.length));
+            return {ok: false, error: errors.join('\n') || result.stderr.trim() || 'decompilation failed'};
+        }
+        return {ok: true, warnings};
+    }
+
     /** Parse a scene into JSON (sprites, scripts, assets) without compiling it. */
     async describeScene (projectRoot, scenePath) {
         const result = await run(this.rake, [scenePath, '--print-scene', '--json-errors'], projectRoot);

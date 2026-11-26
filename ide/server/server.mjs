@@ -131,6 +131,13 @@ export const createServer = ({
                 binaries
             });
         }
+        if (parts[0] === 'import' && parts.length === 1 && method === 'POST') {
+            // Experimental: the body is an .sb3 archive that becomes a new project.
+            const name = url.searchParams.get('name');
+            const result = await store.importSb3(name, await readBody(request),
+                (sb3Path, directory) => toolchain.decompile(sb3Path, directory));
+            return sendJson(response, 201, result);
+        }
         if (parts[0] !== 'projects') throw new ProjectError(404, 'Unknown API endpoint');
 
         if (parts.length === 1) {

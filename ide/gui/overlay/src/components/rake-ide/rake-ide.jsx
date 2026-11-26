@@ -79,6 +79,7 @@ class RakeIDE extends React.Component {
         this.firstBuildDone = false;
         this.editorHost = React.createRef();
         this.uploadInput = React.createRef();
+        this.importInput = React.createRef();
     }
 
     componentDidMount () {
@@ -242,6 +243,11 @@ class RakeIDE extends React.Component {
         const action = event.target.value;
         event.target.value = '';
         const project = this.state.project;
+        if (action === 'import') {
+            // The file picker must open synchronously inside the user's change event.
+            this.importInput.current.click();
+            return;
+        }
         this.runAction(async () => {
             if (action === 'new') {
                 const name = this.promptName(this.t('projectName'));
@@ -278,6 +284,29 @@ class RakeIDE extends React.Component {
             } else if (action === 'download' && project && this.state.activeScene) {
                 await this.saveAll();
                 window.open(api.downloadUrl(project.name, this.state.activeScene), '_blank');
+            }
+        });
+    };
+
+    handleImportSb3 = event => {
+        const file = (event.target.files || [])[0];
+        event.target.value = '';
+        if (!file) return;
+        this.runAction(async () => {
+            const suggested = file.name.replace(/\.sb3$/i, '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+                .replace(/^\.+|\.+$/g, '')
+                .slice(0, 64);
+            const name = this.promptName(this.t('projectName'), suggested);
+            if (!name) return;
+            this.log(this.t('importing', {file: file.name}));
+            const {warnings} = await api.importSb3(name, file);
+            for (const warning of warnings) this.log(`⚠ ${warning}`);
+            this.log(this.t('imported', {file: file.name, name, count: warnings.length}));
+            await this.refreshProjects();
+            await this.openProject(name);
+            if (warnings.length) {
+                // eslint-disable-next-line no-alert
+                window.alert(this.t('importWarnings', {name, count: warnings.length}));
             }
         });
     };
@@ -983,6 +1012,7 @@ class RakeIDE extends React.Component {
                         >
                             <option value="">{'☰'}</option>
                             <option value="new">{t('newProject')}</option>
+                            <option value="import">{t('importSb3')}</option>
                             <option
                                 disabled={!project}
                                 value="duplicate"
@@ -1000,6 +1030,13 @@ class RakeIDE extends React.Component {
                                 value="delete"
                             >{t('deleteProject')}</option>
                         </select>
+                        <input
+                            accept=".sb3"
+                            className={styles.hidden}
+                            ref={this.importInput}
+                            type="file"
+                            onChange={this.handleImportSb3}
+                        />
                         <span className={styles.label}>{t('activeScene')}</span>
                         <select
                             className={styles.sceneSelect}
