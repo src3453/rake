@@ -137,6 +137,41 @@ test('builds scenes and reports compiler errors', async () => {
     assert.equal(error.line, 1);
 });
 
+test('imports an .sb3 by decompiling it into a new project', async () => {
+    await json('POST', '/api/projects', {name: 'source'});
+    let response = await fetch(`${base}/api/projects/source/build`, {
+        method: 'POST', body: JSON.stringify({source: 'scenes/main.rks'})
+    });
+    const sb3 = Buffer.from(await response.arrayBuffer());
+
+    response = await fetch(`${base}/api/import?name=imported`, {method: 'POST', body: sb3});
+    assert.equal(response.status, 201);
+    const {project, warnings} = await response.json();
+    assert.equal(project.manifest.name, 'imported');
+    assert.equal(project.manifest.mainScene, 'scenes/main.rks');
+    assert.ok(project.files.some(file => file.path === 'src/Player.rk'));
+    assert.ok(Array.isArray(warnings));
+
+    // The imported project builds again.
+    response = await fetch(`${base}/api/projects/imported/build`, {
+        method: 'POST', body: JSON.stringify({source: 'scenes/main.rks'})
+    });
+    assert.equal(response.status, 200);
+
+    response = await fetch(`${base}/api/import?name=imported`, {method: 'POST', body: sb3});
+    assert.equal(response.status, 409);
+    response = await fetch(`${base}/api/import?name=broken`, {method: 'POST', body: 'not an sb3'});
+    assert.equal(response.status, 400);
+    response = await fetch(`${base}/api/import?name=corrupt`, {method: 'POST', body: Buffer.from('PK broken')});
+    assert.equal(response.status, 422);
+    const names = (await json('GET', '/api/projects')).body.map(item => item.name);
+    assert.ok(!names.includes('corrupt'));
+    response = await fetch(`${base}/api/import?name=x`, {
+        method: 'POST', body: sb3, headers: {Origin: 'https://example.com'}
+    });
+    assert.equal(response.status, 403);
+});
+
 test('bridges the language server over WebSocket', async () => {
     const socket = new WebSocket(`${base.replace('http', 'ws')}/lsp`);
     await new Promise((resolve, reject) => {

@@ -8,6 +8,7 @@
 // Deleted projects and files are moved to a `.trash` folder instead of being removed.
 
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 export const MANIFEST = 'rake-ide.json';
@@ -126,6 +127,35 @@ export class ProjectStore {
         const manifest = await this.readManifest(directory);
         await this.writeManifest(name, {...manifest, name: path.basename(directory)});
         return this.describe(name);
+    }
+
+    /**
+     * Create a project by decompiling an .sb3 with `decompile(sb3Path, directory)`.
+     * The project folder is removed again when decompilation fails.
+     */
+    async importSb3 (name, bytes, decompile) {
+        const directory = this.projectPath(name);
+        if (await exists(directory)) {
+            throw new ProjectError(409, `A project named ${name} already exists`);
+        }
+        if (!bytes.length || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+            throw new ProjectError(400, 'The uploaded file is not an .sb3 archive');
+        }
+        const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'rake-import-'));
+        try {
+            const sb3Path = path.join(staging, 'project.sb3');
+            await fs.writeFile(sb3Path, bytes);
+            const result = await decompile(sb3Path, directory);
+            if (!result.ok) {
+                await fs.rm(directory, {recursive: true, force: true});
+                throw new ProjectError(422, `Cannot decompile the .sb3: ${result.error}`);
+            }
+            const manifest = await this.readManifest(directory);
+            await this.writeManifest(name, {...manifest, name: path.basename(directory)});
+            return {project: await this.describe(name), warnings: result.warnings};
+        } finally {
+            await fs.rm(staging, {recursive: true, force: true});
+        }
     }
 
     async duplicate (name, newName) {

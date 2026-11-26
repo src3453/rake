@@ -31,6 +31,8 @@ export default {
     info: () => request('GET', '/api/info'),
     listProjects: () => request('GET', '/api/projects'),
     createProject: (name, template = 'default') => request('POST', '/api/projects', {json: {name, template}}),
+    /** Experimental: decompile an .sb3 file into a new project. Resolves to {project, warnings}. */
+    importSb3: (name, file) => request('POST', `/api/import?name=${encodeURIComponent(name)}`, {body: file}),
     getProject: name => request('GET', project(name)),
     renameProject: (name, newName) => request('POST', `${project(name)}/rename`, {json: {name: newName}}),
     duplicateProject: (name, newName) => request('POST', `${project(name)}/duplicate`, {json: {name: newName}}),

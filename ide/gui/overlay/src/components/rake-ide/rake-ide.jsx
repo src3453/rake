@@ -20,6 +20,10 @@ const TEXT_EXTENSIONS = /\.(rk|rks|json|md|txt|svg|csv)$/i;
 const IMAGE_EXTENSIONS = /\.(svg|png|jpe?g|gif|bmp)$/i;
 const AUDIO_EXTENSIONS = /\.(wav|mp3)$/i;
 const STORAGE_KEY = 'rake-ide';
+// split: blocks | code | stage. blocks: the code editor is hidden. code: the code editor
+// takes the place of the Scratch editor (blocks, costumes, sounds).
+const LAYOUTS = ['blocks', 'split', 'code'];
+const LAYOUT_ICONS = {blocks: '▦', split: '◫', code: '</>'};
 
 const loadSettings = () => {
     try {
@@ -64,7 +68,7 @@ class RakeIDE extends React.Component {
             log: [],
             lspStatus: 'connecting',
             width: settings.width || 520,
-            hidden: false,
+            layout: LAYOUTS.includes(settings.layout) ? settings.layout : 'split',
             monacoReady: false
         };
         this.models = new Map();
@@ -75,9 +79,11 @@ class RakeIDE extends React.Component {
         this.firstBuildDone = false;
         this.editorHost = React.createRef();
         this.uploadInput = React.createRef();
+        this.importInput = React.createRef();
     }
 
     componentDidMount () {
+        this.applyLayout();
         this.start();
         window.addEventListener('beforeunload', this.handleBeforeUnload);
     }
@@ -93,6 +99,7 @@ class RakeIDE extends React.Component {
 
     componentWillUnmount () {
         window.removeEventListener('beforeunload', this.handleBeforeUnload);
+        delete document.body.dataset.rakeLayout;
         if (this.lsp) this.lsp.dispose();
         if (this.editor) this.editor.dispose();
         this.models.forEach(model => model.dispose());
@@ -236,6 +243,11 @@ class RakeIDE extends React.Component {
         const action = event.target.value;
         event.target.value = '';
         const project = this.state.project;
+        if (action === 'import') {
+            // The file picker must open synchronously inside the user's change event.
+            this.importInput.current.click();
+            return;
+        }
         this.runAction(async () => {
             if (action === 'new') {
                 const name = this.promptName(this.t('projectName'));
@@ -272,6 +284,29 @@ class RakeIDE extends React.Component {
             } else if (action === 'download' && project && this.state.activeScene) {
                 await this.saveAll();
                 window.open(api.downloadUrl(project.name, this.state.activeScene), '_blank');
+            }
+        });
+    };
+
+    handleImportSb3 = event => {
+        const file = (event.target.files || [])[0];
+        event.target.value = '';
+        if (!file) return;
+        this.runAction(async () => {
+            const suggested = file.name.replace(/\.sb3$/i, '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+                .replace(/^\.+|\.+$/g, '')
+                .slice(0, 64);
+            const name = this.promptName(this.t('projectName'), suggested);
+            if (!name) return;
+            this.log(this.t('importing', {file: file.name}));
+            const {warnings} = await api.importSb3(name, file);
+            for (const warning of warnings) this.log(`⚠ ${warning}`);
+            this.log(this.t('imported', {file: file.name, name, count: warnings.length}));
+            await this.refreshProjects();
+            await this.openProject(name);
+            if (warnings.length) {
+                // eslint-disable-next-line no-alert
+                window.alert(this.t('importWarnings', {name, count: warnings.length}));
             }
         });
     };
@@ -732,9 +767,51 @@ class RakeIDE extends React.Component {
         window.addEventListener('mouseup', up);
     };
 
-    handleToggleHidden = () => {
-        this.setState(state => ({hidden: !state.hidden}), () => window.dispatchEvent(new Event('resize')));
-    };
+    applyLayout () {
+        // gui.css (patched) hides the Scratch editor in code mode through this attribute.
+        document.body.dataset.rakeLayout = this.state.layout;
+        // Blockly and the stage measure themselves on window resize.
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    setLayout (layout) {
+        if (layout === this.state.layout) return;
+        saveSettings({layout});
+        this.setState({layout}, () => {
+            this.applyLayout();
+            if (layout !== 'blocks' && this.editor) this.editor.focus();
+        });
+    }
+
+    renderLayoutSwitch (vertical) {
+        return (
+            <div
+                className={`${styles.layoutSwitch} ${vertical ? styles.layoutSwitchVertical : ''}`}
+                role="radiogroup"
+                title={this.t('layout')}
+            >
+                {LAYOUTS.map(layout => (
+                    <button
+                        aria-checked={this.state.layout === layout}
+                        className={this.state.layout === layout ? styles.layoutActive : ''}
+                        key={layout}
+                        role="radio"
+                        title={this.t(`${layout === 'blocks' ? 'layoutBlocks' : layout === 'split' ?
+                            'layoutSplit' : 'layoutCode'}Tooltip`)}
+                        onClick={() => this.setLayout(layout)}
+                    >
+                        <span className={styles.layoutIcon}>{LAYOUT_ICONS[layout]}</span>
+                        {vertical ? null : (
+                            <span className={styles.layoutLabel}>
+                                {this.t(layout === 'blocks' ? 'layoutBlocks' : layout === 'split' ?
+                                    'layoutSplit' : 'layoutCode')}
+                            </span>
+                        )}
+                    </button>
+                ))}
+            </div>
+        );
+    }
 
     // ---- Rendering ----
 
@@ -885,258 +962,270 @@ class RakeIDE extends React.Component {
     render () {
         const t = this.t;
         const {project, projects, openTabs, activePath, dirty, sidebarTab, activeScene, bottomTab, log} = this.state;
-        if (this.state.hidden) {
-            return (
-                <div className={styles.collapsedBar}>
-                    <button
-                        title={t('showPanel')}
-                        onClick={this.handleToggleHidden}
-                    >{'‹'}</button>
-                </div>
-            );
-        }
+        const layout = this.state.layout;
         const problems = this.problems();
+        // The panel stays mounted in blocks mode so Monaco, the LSP connection and live builds keep running.
         return (
-            <div
-                className={`${styles.ide} ${this.props.isDark ? styles.dark : ''}`}
-                style={{width: this.state.width}}
-            >
-                <div
-                    className={styles.resizer}
-                    onMouseDown={this.handleResizeStart}
-                />
-                <div className={styles.toolbar}>
-                    <select
-                        className={styles.projectSelect}
-                        title={t('project')}
-                        value={project ? project.name : ''}
-                        onChange={this.handleSelectProject}
-                    >
-                        {project ? null : <option value="">{t('project')}</option>}
-                        {projects.map(item => (
-                            <option
-                                key={item.name}
-                                value={item.name}
-                            >{item.name}</option>
-                        ))}
-                    </select>
-                    <select
-                        className={styles.menuSelect}
-                        title={t('projects')}
-                        value=""
-                        onChange={this.handleProjectMenu}
-                    >
-                        <option value="">{'☰'}</option>
-                        <option value="new">{t('newProject')}</option>
-                        <option
-                            disabled={!project}
-                            value="duplicate"
-                        >{t('duplicateProject')}</option>
-                        <option
-                            disabled={!project}
-                            value="rename"
-                        >{t('renameProject')}</option>
-                        <option
-                            disabled={!project || !activeScene}
-                            value="download"
-                        >{t('download')}</option>
-                        <option
-                            disabled={!project}
-                            value="delete"
-                        >{t('deleteProject')}</option>
-                    </select>
-                    <span className={styles.label}>{t('activeScene')}</span>
-                    <select
-                        className={styles.sceneSelect}
-                        value={activeScene || ''}
-                        onChange={this.handleSceneSelect}
-                    >
-                        {this.scenes().map(scenePath => (
-                            <option
-                                key={scenePath}
-                                value={scenePath}
-                            >{basename(scenePath)}</option>
-                        ))}
-                    </select>
-                    <button
-                        className={styles.buildButton}
-                        disabled={!project || !activeScene}
-                        title={t('buildTooltip')}
-                        onClick={this.handleBuildClick}
-                    >{'▶ '}{t('build')}</button>
-                    <label
-                        className={styles.toggle}
-                        title={t('autoBuildTooltip')}
-                    >
-                        <input
-                            checked={this.state.autoBuild}
-                            type="checkbox"
-                            onChange={this.handleToggleAutoBuild}
-                        />
-                        {t('autoBuild')}
-                    </label>
-                    <select
-                        className={styles.delaySelect}
-                        title={t('delay')}
-                        value={this.state.delay}
-                        onChange={this.handleDelayChange}
-                    >
-                        {[300, 500, 800, 1200, 2000].map(ms => (
-                            <option
-                                key={ms}
-                                value={ms}
-                            >{`${ms} ms`}</option>
-                        ))}
-                    </select>
-                    <label
-                        className={styles.toggle}
-                        title={t('restoreRunning')}
-                    >
-                        <input
-                            checked={this.state.keepRunning}
-                            type="checkbox"
-                            onChange={this.handleToggleKeepRunning}
-                        />
-                        {'⚑'}
-                    </label>
-                    <span className={styles.spacer} />
-                    {this.renderStatus()}
-                    <button
-                        className={styles.iconButton}
-                        title={t('hidePanel')}
-                        onClick={this.handleToggleHidden}
-                    >{'›'}</button>
-                </div>
-                {this.state.serverError ? <div className={styles.banner}>{this.state.serverError}</div> : null}
-                <div className={styles.body}>
-                    <div className={styles.sidebar}>
-                        <div className={styles.sidebarTabs}>
-                            <button
-                                className={sidebarTab === 'files' ? styles.activeTab : ''}
-                                onClick={() => {
-                                    this.setState({sidebarTab: 'files'});
-                                    saveSettings({sidebarTab: 'files'});
-                                }}
-                            >{t('files')}</button>
-                            <button
-                                className={sidebarTab === 'scenes' ? styles.activeTab : ''}
-                                onClick={() => {
-                                    this.setState({sidebarTab: 'scenes'});
-                                    saveSettings({sidebarTab: 'scenes'});
-                                }}
-                            >{t('scenes')}</button>
-                        </div>
-                        <div className={styles.sidebarActions}>
-                            {sidebarTab === 'files' ? (
-                                <React.Fragment>
-                                    <button
-                                        disabled={!project}
-                                        title={t('newFile')}
-                                        onClick={this.handleNewFile}
-                                    >{'+ 📄'}</button>
-                                    <button
-                                        disabled={!project}
-                                        title={t('newFolder')}
-                                        onClick={this.handleNewFolder}
-                                    >{'+ 📁'}</button>
-                                    <button
-                                        disabled={!project}
-                                        title={t('upload')}
-                                        onClick={this.handleUploadClick}
-                                    >{'⇪'}</button>
-                                    <input
-                                        multiple
-                                        accept=".svg,.png,.jpg,.jpeg,.gif,.bmp,.wav,.mp3,.rk,.rks"
-                                        className={styles.hidden}
-                                        ref={this.uploadInput}
-                                        type="file"
-                                        onChange={this.handleUpload}
-                                    />
-                                </React.Fragment>
-                            ) : (
-                                <button
-                                    disabled={!project}
-                                    title={t('newScene')}
-                                    onClick={this.handleNewScene}
-                                >{`+ ${t('newScene')}`}</button>
-                            )}
-                        </div>
-                        {sidebarTab === 'files' ? this.renderFileTree() : this.renderScenes()}
+            <React.Fragment>
+                {layout === 'blocks' ? (
+                    <div className={`${styles.collapsedBar} ${this.props.isDark ? styles.dark : ''}`}>
+                        {this.renderLayoutSwitch(true)}
+                        {this.state.build.status === 'error' ? (
+                            <span
+                                className={styles.statusError}
+                                title={t('buildFailed')}
+                            >{'⨯'}</span>
+                        ) : null}
                     </div>
-                    <div className={styles.main}>
-                        <div className={styles.tabs}>
-                            {openTabs.map(tab => (
-                                <div
-                                    className={`${styles.tab} ${tab === activePath ? styles.activeTab : ''}`}
-                                    key={tab}
-                                    title={tab}
-                                    onClick={() => this.openFile(tab)}
-                                >
-                                    <span>{basename(tab)}</span>
-                                    {dirty.includes(tab) ? <span className={styles.dirty}>{'●'}</span> : null}
+                ) : null}
+                <div
+                    className={`${styles.ide} ${this.props.isDark ? styles.dark : ''} ${
+                        layout === 'code' ? styles.ideCode : ''} ${layout === 'blocks' ? styles.hidden : ''}`}
+                    style={layout === 'split' ? {width: this.state.width} : null}
+                >
+                    {layout === 'split' ? (
+                        <div
+                            className={styles.resizer}
+                            onMouseDown={this.handleResizeStart}
+                        />
+                    ) : null}
+                    <div className={styles.toolbar}>
+                        <select
+                            className={styles.projectSelect}
+                            title={t('project')}
+                            value={project ? project.name : ''}
+                            onChange={this.handleSelectProject}
+                        >
+                            {project ? null : <option value="">{t('project')}</option>}
+                            {projects.map(item => (
+                                <option
+                                    key={item.name}
+                                    value={item.name}
+                                >{item.name}</option>
+                            ))}
+                        </select>
+                        <select
+                            className={styles.menuSelect}
+                            title={t('projects')}
+                            value=""
+                            onChange={this.handleProjectMenu}
+                        >
+                            <option value="">{'☰'}</option>
+                            <option value="new">{t('newProject')}</option>
+                            <option value="import">{t('importSb3')}</option>
+                            <option
+                                disabled={!project}
+                                value="duplicate"
+                            >{t('duplicateProject')}</option>
+                            <option
+                                disabled={!project}
+                                value="rename"
+                            >{t('renameProject')}</option>
+                            <option
+                                disabled={!project || !activeScene}
+                                value="download"
+                            >{t('download')}</option>
+                            <option
+                                disabled={!project}
+                                value="delete"
+                            >{t('deleteProject')}</option>
+                        </select>
+                        <input
+                            accept=".sb3"
+                            className={styles.hidden}
+                            ref={this.importInput}
+                            type="file"
+                            onChange={this.handleImportSb3}
+                        />
+                        <span className={styles.label}>{t('activeScene')}</span>
+                        <select
+                            className={styles.sceneSelect}
+                            value={activeScene || ''}
+                            onChange={this.handleSceneSelect}
+                        >
+                            {this.scenes().map(scenePath => (
+                                <option
+                                    key={scenePath}
+                                    value={scenePath}
+                                >{basename(scenePath)}</option>
+                            ))}
+                        </select>
+                        <button
+                            className={styles.buildButton}
+                            disabled={!project || !activeScene}
+                            title={t('buildTooltip')}
+                            onClick={this.handleBuildClick}
+                        >{'▶ '}{t('build')}</button>
+                        <label
+                            className={styles.toggle}
+                            title={t('autoBuildTooltip')}
+                        >
+                            <input
+                                checked={this.state.autoBuild}
+                                type="checkbox"
+                                onChange={this.handleToggleAutoBuild}
+                            />
+                            {t('autoBuild')}
+                        </label>
+                        <select
+                            className={styles.delaySelect}
+                            title={t('delay')}
+                            value={this.state.delay}
+                            onChange={this.handleDelayChange}
+                        >
+                            {[300, 500, 800, 1200, 2000].map(ms => (
+                                <option
+                                    key={ms}
+                                    value={ms}
+                                >{`${ms} ms`}</option>
+                            ))}
+                        </select>
+                        <label
+                            className={styles.toggle}
+                            title={t('restoreRunning')}
+                        >
+                            <input
+                                checked={this.state.keepRunning}
+                                type="checkbox"
+                                onChange={this.handleToggleKeepRunning}
+                            />
+                            {'⚑'}
+                        </label>
+                        <span className={styles.spacer} />
+                        {this.renderStatus()}
+                        {this.renderLayoutSwitch(false)}
+                    </div>
+                    {this.state.serverError ? <div className={styles.banner}>{this.state.serverError}</div> : null}
+                    <div className={styles.body}>
+                        <div className={styles.sidebar}>
+                            <div className={styles.sidebarTabs}>
+                                <button
+                                    className={sidebarTab === 'files' ? styles.activeTab : ''}
+                                    onClick={() => {
+                                        this.setState({sidebarTab: 'files'});
+                                        saveSettings({sidebarTab: 'files'});
+                                    }}
+                                >{t('files')}</button>
+                                <button
+                                    className={sidebarTab === 'scenes' ? styles.activeTab : ''}
+                                    onClick={() => {
+                                        this.setState({sidebarTab: 'scenes'});
+                                        saveSettings({sidebarTab: 'scenes'});
+                                    }}
+                                >{t('scenes')}</button>
+                            </div>
+                            <div className={styles.sidebarActions}>
+                                {sidebarTab === 'files' ? (
+                                    <React.Fragment>
+                                        <button
+                                            disabled={!project}
+                                            title={t('newFile')}
+                                            onClick={this.handleNewFile}
+                                        >{'+ 📄'}</button>
+                                        <button
+                                            disabled={!project}
+                                            title={t('newFolder')}
+                                            onClick={this.handleNewFolder}
+                                        >{'+ 📁'}</button>
+                                        <button
+                                            disabled={!project}
+                                            title={t('upload')}
+                                            onClick={this.handleUploadClick}
+                                        >{'⇪'}</button>
+                                        <input
+                                            multiple
+                                            accept=".svg,.png,.jpg,.jpeg,.gif,.bmp,.wav,.mp3,.rk,.rks"
+                                            className={styles.hidden}
+                                            ref={this.uploadInput}
+                                            type="file"
+                                            onChange={this.handleUpload}
+                                        />
+                                    </React.Fragment>
+                                ) : (
                                     <button
-                                        className={styles.closeTab}
-                                        onClick={event => this.closeTab(tab, event)}
-                                    >{'×'}</button>
+                                        disabled={!project}
+                                        title={t('newScene')}
+                                        onClick={this.handleNewScene}
+                                    >{`+ ${t('newScene')}`}</button>
+                                )}
+                            </div>
+                            {sidebarTab === 'files' ? this.renderFileTree() : this.renderScenes()}
+                        </div>
+                        <div className={styles.main}>
+                            <div className={styles.tabs}>
+                                {openTabs.map(tab => (
+                                    <div
+                                        className={`${styles.tab} ${tab === activePath ? styles.activeTab : ''}`}
+                                        key={tab}
+                                        title={tab}
+                                        onClick={() => this.openFile(tab)}
+                                    >
+                                        <span>{basename(tab)}</span>
+                                        {dirty.includes(tab) ? <span className={styles.dirty}>{'●'}</span> : null}
+                                        <button
+                                            className={styles.closeTab}
+                                            onClick={event => this.closeTab(tab, event)}
+                                        >{'×'}</button>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className={styles.editorArea}>
+                                <div
+                                    className={styles.editor}
+                                    ref={this.editorHost}
+                                    style={{visibility: activePath && TEXT_EXTENSIONS.test(activePath) ? 'visible' : 'hidden'}}
+                                />
+                                {this.renderPreview()}
+                                {activePath ? null : (
+                                    <div className={styles.placeholder}>{project ? t('noFile') : t('noProject')}</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    <div className={styles.bottom}>
+                        <div className={styles.bottomTabs}>
+                            <button
+                                className={bottomTab === 'problems' ? styles.activeTab : ''}
+                                onClick={() => this.setState({bottomTab: 'problems'})}
+                            >{`${t('problems')} (${problems.length})`}</button>
+                            <button
+                                className={bottomTab === 'output' ? styles.activeTab : ''}
+                                onClick={() => this.setState({bottomTab: 'output'})}
+                            >{t('output')}</button>
+                            <span className={styles.spacer} />
+                            <span className={styles.lspStatus}>
+                                {this.state.lspStatus === 'ready' ? t('lspReady') :
+                                    this.state.lspStatus === 'disconnected' ? t('lspDisconnected') : t('lspConnecting')}
+                            </span>
+                        </div>
+                        <div className={styles.bottomBody}>
+                            {bottomTab === 'problems' ? (
+                                problems.length ? problems.map((problem, index) => (
+                                    <div
+                                        className={styles.problem}
+                                        key={index}
+                                        onClick={() => this.revealProblem(problem)}
+                                    >
+                                        <span className={styles.problemIcon}>{'⨯'}</span>
+                                        <span className={styles.problemLocation}>
+                                            {problem.file ? `${problem.file}:${problem.line}:${problem.column}` : ''}
+                                        </span>
+                                        <span>{problem.message}</span>
+                                        <span className={styles.problemSource}>{problem.source}</span>
+                                    </div>
+                                )) : <div className={styles.muted}>{t('noProblems')}</div>
+                            ) : log.map((entry, index) => (
+                                <div
+                                    className={entry.level === 'error' ? styles.logError : styles.logLine}
+                                    key={index}
+                                >
+                                    <span className={styles.muted}>{entry.time}</span>{' '}{entry.message}
                                 </div>
                             ))}
                         </div>
-                        <div className={styles.editorArea}>
-                            <div
-                                className={styles.editor}
-                                ref={this.editorHost}
-                                style={{visibility: activePath && TEXT_EXTENSIONS.test(activePath) ? 'visible' : 'hidden'}}
-                            />
-                            {this.renderPreview()}
-                            {activePath ? null : (
-                                <div className={styles.placeholder}>{project ? t('noFile') : t('noProject')}</div>
-                            )}
-                        </div>
                     </div>
                 </div>
-                <div className={styles.bottom}>
-                    <div className={styles.bottomTabs}>
-                        <button
-                            className={bottomTab === 'problems' ? styles.activeTab : ''}
-                            onClick={() => this.setState({bottomTab: 'problems'})}
-                        >{`${t('problems')} (${problems.length})`}</button>
-                        <button
-                            className={bottomTab === 'output' ? styles.activeTab : ''}
-                            onClick={() => this.setState({bottomTab: 'output'})}
-                        >{t('output')}</button>
-                        <span className={styles.spacer} />
-                        <span className={styles.lspStatus}>
-                            {this.state.lspStatus === 'ready' ? t('lspReady') :
-                                this.state.lspStatus === 'disconnected' ? t('lspDisconnected') : t('lspConnecting')}
-                        </span>
-                    </div>
-                    <div className={styles.bottomBody}>
-                        {bottomTab === 'problems' ? (
-                            problems.length ? problems.map((problem, index) => (
-                                <div
-                                    className={styles.problem}
-                                    key={index}
-                                    onClick={() => this.revealProblem(problem)}
-                                >
-                                    <span className={styles.problemIcon}>{'⨯'}</span>
-                                    <span className={styles.problemLocation}>
-                                        {problem.file ? `${problem.file}:${problem.line}:${problem.column}` : ''}
-                                    </span>
-                                    <span>{problem.message}</span>
-                                    <span className={styles.problemSource}>{problem.source}</span>
-                                </div>
-                            )) : <div className={styles.muted}>{t('noProblems')}</div>
-                        ) : log.map((entry, index) => (
-                            <div
-                                className={entry.level === 'error' ? styles.logError : styles.logLine}
-                                key={index}
-                            >
-                                <span className={styles.muted}>{entry.time}</span>{' '}{entry.message}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            </React.Fragment>
         );
     }
 }

@@ -131,6 +131,13 @@ export const createServer = ({
                 binaries
             });
         }
+        if (parts[0] === 'import' && parts.length === 1 && method === 'POST') {
+            // Experimental: the body is an .sb3 archive that becomes a new project.
+            const name = url.searchParams.get('name');
+            const result = await store.importSb3(name, await readBody(request),
+                (sb3Path, directory) => toolchain.decompile(sb3Path, directory));
+            return sendJson(response, 201, result);
+        }
         if (parts[0] !== 'projects') throw new ProjectError(404, 'Unknown API endpoint');
 
         if (parts.length === 1) {
@@ -226,7 +233,7 @@ export const createServer = ({
             if (!file.startsWith(guiDirectory)) throw new ProjectError(403, 'Forbidden');
             if (!fs.existsSync(guiDirectory)) {
                 response.writeHead(503, {'Content-Type': 'text/plain; charset=utf-8'});
-                response.end(`The IDE has not been built yet. Run \`npm run setup\` in ide/ (missing ${guiDirectory}).`);
+                response.end(`The IDE has not been built yet. Run \`bun run setup\` in ide/ (missing ${guiDirectory}).`);
                 return;
             }
             serveFile(response, file);

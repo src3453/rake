@@ -1,8 +1,8 @@
 diff --git a/src/components/gui/gui.css b/src/components/gui/gui.css
-index ad44099..2304b5f 100644
+index ad44099..701a511 100644
 --- a/src/components/gui/gui.css
 +++ b/src/components/gui/gui.css
-@@ -49,7 +49,9 @@
+@@ -49,13 +49,20 @@
      */
      flex-basis: calc(1024px - 408px - (($space + $stage-standard-border-width) * 2));
      flex-grow: 1;
@@ -13,6 +13,17 @@ index ad44099..2304b5f 100644
      position: relative;
  
      display: flex;
+     flex-direction: column;
+ }
+ 
++/* Rake IDE code mode: the code panel takes the place of the Scratch editor. */
++:global(body[data-rake-layout="code"]) .editor-wrapper {
++    display: none;
++}
++
+ .tab-list {
+     height: $stage-menu-height;
+     width: 250px; /* Match width of the toolbox */
 diff --git a/src/components/gui/gui.jsx b/src/components/gui/gui.jsx
 index 30f8336..4edcdb4 100644
 --- a/src/components/gui/gui.jsx
