@@ -44,5 +44,7 @@ include!("compiler/compiler.rs");
 include!("compiler/scene.rs");
 include!("compiler/diagnostics.rs");
 include!("compiler/output.rs");
+include!("compiler/decompiler.rs");
 include!("compiler/tests.rs");
 include!("compiler/scene_tests.rs");
+include!("compiler/decompiler_tests.rs");

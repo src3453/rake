@@ -23,6 +23,96 @@ fn usage() {
     eprintln!(
         "Specify at least one output option. IR and JSON can be emitted without creating an SB3 archive."
     );
+    eprintln!("       rake decompile <project.sb3> -o <output-directory> [--force]");
+    eprintln!(
+        "Experimental: turn an existing .sb3 into a Rake project (scenes/main.rks, src/*.rk, assets/)."
+    );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DecompileOptions {
+    input: PathBuf,
+    output: PathBuf,
+    force: bool,
+}
+
+fn parse_decompile_args<I>(args: I) -> Result<DecompileOptions, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut args = args.into_iter();
+    let mut input = None;
+    let mut output = None;
+    let mut force = false;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "-o" | "--output" => {
+                let path = take_path(&mut args, &argument)?;
+                set_once(&mut output, path, &argument)?;
+            }
+            "--force" => force = true,
+            _ if input.is_none() && !argument.starts_with('-') => input = Some(PathBuf::from(argument)),
+            _ => return Err(format!("unexpected argument {argument:?}")),
+        }
+    }
+    Ok(DecompileOptions {
+        input: input.ok_or("missing .sb3 file to decompile")?,
+        output: output.ok_or("missing output directory (-o <directory>)")?,
+        force,
+    })
+}
+
+fn run_decompile<I>(args: I) -> ExitCode
+where
+    I: IntoIterator<Item = String>,
+{
+    let options = match parse_decompile_args(args) {
+        Ok(options) => options,
+        Err(error) => {
+            usage();
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let non_empty = fs::read_dir(&options.output)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+    if non_empty && !options.force {
+        eprintln!(
+            "error: {} is not empty; choose another directory or pass --force to overwrite files in it",
+            options.output.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    let bytes = match fs::read(&options.input) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("error: cannot read {}: {error}", options.input.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let decompilation = match rake::decompile_sb3_bytes(&bytes) {
+        Ok(decompilation) => decompilation,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = rake::write_decompilation(&options.output, &decompilation) {
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
+    }
+    for warning in &decompilation.warnings {
+        eprintln!("warning: {warning}");
+    }
+    println!(
+        "wrote {} ({} files, {} warnings); compile it with: rake {} -o <output.sb3>",
+        options.output.display(),
+        decompilation.files.len(),
+        decompilation.warnings.len(),
+        options.output.join(&decompilation.scene_path).display()
+    );
+    ExitCode::SUCCESS
 }
 
 fn take_path<I>(args: &mut I, option: &str) -> Result<PathBuf, String>
@@ -131,6 +221,9 @@ fn run() -> ExitCode {
     if first_arg == "--help" || first_arg == "-h" {
         usage();
         return ExitCode::SUCCESS;
+    }
+    if first_arg == "decompile" {
+        return run_decompile(raw_args);
     }
     let args = std::iter::once(first_arg).chain(raw_args);
     let options = match parse_args(args) {
@@ -282,6 +375,17 @@ mod tests {
         let scene = parse_args(args(&["scene.rks", "-o", "scene.sb3", "--json-errors"]))
             .expect("scenes and JSON errors should be accepted");
         assert!(scene.json_errors);
+    }
+
+    #[test]
+    fn parses_decompile_arguments() {
+        let options = parse_decompile_args(args(&["game.sb3", "-o", "out", "--force"]))
+            .expect("decompile arguments should be accepted");
+        assert_eq!(options.input, PathBuf::from("game.sb3"));
+        assert_eq!(options.output, PathBuf::from("out"));
+        assert!(options.force);
+        assert!(parse_decompile_args(args(&["game.sb3"])).unwrap_err().contains("missing output directory"));
+        assert!(parse_decompile_args(args(&["-o", "out"])).unwrap_err().contains("missing .sb3"));
     }
 
     #[test]
