@@ -521,7 +521,7 @@ MutexはScratchの協調実行における共有状態保護機構であり、�
 
 ## 7. シーン定義DSL
 
-通常の Scene 用 `.rks` は Scratch プロジェクト内の1シーンを宣言的に記述し、1ファイルに1つのシーンを定義する。`.rks` はプロジェクト全体のビルド設定や任意の実行コードを含めない。プロジェクトルートの `main.rks` は初期 Scene を定義し、Scene 間の遷移を記述する特別な入力とする。
+通常の Scene 用 `.rks` は Scratch プロジェクト内の1シーンを宣言的に記述し、1ファイルに1つのシーンを定義する。`.rks` はランタイム選択以外のプロジェクト全体のビルド設定や任意の実行コードを含めない。プロジェクトルートの `main.rks` は初期 Scene を定義し、Scene 間の遷移を記述する特別な入力とする。
 
 シーンには Scratch の Stage と Sprite を含める。Stage は背景だけでなくスクリプトの割り当て先にもなる。スクリプト本体は `.rk` に書き、`.rks` ではどの Scratch ターゲットに割り当てるかを宣言する。
 
@@ -548,7 +548,13 @@ project/
 
 各 Scene 用 `.rks` は単一の Scene を定義する。ビルドマニフェストは別 crate が所有する別ファイルであり、`.rks` をパッケージマニフェストとして扱わない。
 
-### 7.2 シーン定義
+### 7.2 ランタイムと拡張機能
+
+Scratch と TurboWarp では利用できる拡張機能が異なるため、`.rks` の Scene 直下に `runtime: "scratch"` または `runtime: "turbowarp"` を指定する。省略時は Scratch を対象とする。単体 `.rk` のコンパイルでは `--runtime scratch|turbowarp` で指定し、省略時は Scratch とする。
+
+組み込み拡張ブロックは `Scratch.Extension.<ExtensionName>` 名前空間に置き、ブロックカタログには Scratch の拡張IDと対応ランタイムを記録する。生成する `.sb3` の `extensions` には、実際に使用した拡張IDだけを出力する。Pen と Music は両ランタイム共通の拡張として提供する。TurboWarp のURL指定カスタム拡張は、拡張のURLをプロジェクトへ渡す仕組みを別途実装するまで対象外とする。
+
+### 7.3 シーン定義
 
 ``` rust
 scene Game {

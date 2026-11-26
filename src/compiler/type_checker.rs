@@ -1,4 +1,5 @@
 struct TypeChecker {
+    runtime: Runtime,
     scopes: Vec<HashMap<String, Symbol>>,
     symbols: Vec<Symbol>,
     scratch_names: Vec<String>,
@@ -17,8 +18,9 @@ struct TypeChecker {
 }
 
 impl TypeChecker {
-    fn new() -> Self {
+    fn new(runtime: Runtime) -> Self {
         Self {
+            runtime,
             scopes: vec![HashMap::new()],
             symbols: Vec::new(),
             scratch_names: Vec::new(),
@@ -35,6 +37,22 @@ impl TypeChecker {
             next_object_ordinal: 0,
             used_proccodes: std::collections::HashSet::new(),
         }
+    }
+
+    fn check_builtin_runtime(&self, builtin: &BuiltinBlock, token: &Token) -> Result<(), String> {
+        if let Some(extension) = builtin.extension {
+            if !self.runtime.supports_extension(extension) {
+                return Err(diagnostic(
+                    token,
+                    format!(
+                        "Scratch extension {extension:?} used by {:?} is not available in the {} runtime",
+                        builtin.name,
+                        self.runtime.as_str()
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn check(mut self, statements: &mut Vec<Stmt>) -> Result<Vec<Symbol>, String> {

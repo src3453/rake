@@ -139,10 +139,10 @@ impl ScratchBuilder {
                 continue;
             }
             let input = if let Some(menu) = &spec.menu {
-                let selection = if let ExprKind::Text(value) = &argument.kind {
-                    value.as_str()
-                } else {
-                    menu.default
+                let (selection, literal_selection) = match &argument.kind {
+                    ExprKind::Text(value) => (value.as_str(), true),
+                    ExprKind::Number(value) => (value.as_str(), true),
+                    _ => (menu.default, false),
                 };
                 let field_value = if menu.opcode == "event_broadcast_menu" {
                     json!([selection, self.broadcast_id(selection)])
@@ -153,7 +153,7 @@ impl ScratchBuilder {
                 menu_fields.insert(menu.field.to_string(), field_value);
                 let menu_id = self.block(menu.opcode, Some(&id), false, Value::Object(menu_fields));
                 self.blocks.get_mut(&menu_id).unwrap()["shadow"] = json!(true);
-                if matches!(&argument.kind, ExprKind::Text(_)) {
+                if literal_selection {
                     json!([1, menu_id])
                 } else {
                     let reporter = self.reporter(argument, &id)?;
@@ -168,6 +168,13 @@ impl ScratchBuilder {
                         } else {
                             let reporter = self.reporter(argument, &id)?;
                             json!([3, reporter, [9, "#000000"]])
+                        }
+                    }
+                    BuiltinInputKind::Note => {
+                        if let ExprKind::Number(value) = &argument.kind {
+                            json!([1, [7, value]])
+                        } else {
+                            json!([3, self.reporter(argument, &id)?, [7, "60"]])
                         }
                     }
                     BuiltinInputKind::Value => self.value_input(argument, &id)?,

@@ -191,7 +191,30 @@ var x: float = Scratch.Motion.xPosition()
 
 `use Scratch.Motion` は `Motion` という名前で名前空間を取り込みます。`use Scratch.Motion as motion` で別名を指定できます。`use Scratch.Motion.{move, rotate}` は選んだブロックを直接呼び出せるようにし、`use Scratch.Motion as motion.{move, rotate}` は選んだブロックを `motion.move()` / `motion.rotate()` として使えるようにします。`use Scratch.Motion.move as move` のように単一の関数やクラスに別名を付けることもできます。
 
-組み込みブロックは `Scratch.Motion`、`Scratch.Looks`、`Scratch.Sound`、`Scratch.Events`、`Scratch.Control`、`Scratch.Sensing`、`Scratch.Operators` にあります。呼び出しは対応する標準 opcode のScratchブロックとして出力し、引数の個数と真偽値入力を型検査します。メニュー入力を取る主要なターゲット選択ブロックとbroadcastも利用できます。回転APIは `rotate()` / `rotateCW()` が時計回り、`rotateCCW()` が反時計回りです。`event` が生成するイベントハット以外のサブスタック制御ブロック、その他のメニュー選択、拡張ブロックはまだ提供していません。
+組み込みブロックは `Scratch.Motion`、`Scratch.Looks`、`Scratch.Sound`、`Scratch.Events`、`Scratch.Control`、`Scratch.Sensing`、`Scratch.Operators` にあります。呼び出しは対応する標準 opcode のScratchブロックとして出力し、引数の個数と真偽値入力を型検査します。メニュー入力を取る主要なターゲット選択ブロックとbroadcastも利用できます。回転APIは `rotate()` / `rotateCW()` が時計回り、`rotateCCW()` が反時計回りです。Pen と Music の拡張ブロックは `Scratch.Extension.Pen` と `Scratch.Extension.Music` にあります。拡張ブロックを使うと、コンパイラは `.sb3` の `extensions` に必要な拡張IDだけを記録します。
+
+Scratch と TurboWarp は読み込み可能な拡張機能の範囲が異なるため、ビルド対象ランタイムを指定できます。`.rks` ではシーン直下の `runtime: "scratch"` または `runtime: "turbowarp"` で選び、省略時はScratchです。単体 `.rk` は `--runtime scratch|turbowarp` を指定でき、既定値はScratchです。現状のPen/Musicブロックは両方のランタイムで使える共通ブロックです。TurboWarpのURL指定カスタム拡張は、拡張URLをプロジェクトに渡す仕組みが未実装のため対象外です。
+
+```rake
+use Scratch.Extension.Pen as Pen
+use Scratch.Extension.Music as Music
+
+event Scratch.Events.greenFlag {
+    Pen.clear()
+    Pen.setColor("#3366ff")
+    Pen.setSizeTo(4)
+    Pen.down()
+    Scratch.Motion.move(100)
+    Pen.up()
+
+    Music.setInstrument(1)
+    Music.setTempoTo(120)
+    Music.playNoteForBeats(60, 1)
+}
+```
+
+色パラメーターは `Pen.changeColorParamBy("color", 10)`、`Pen.setColorParamTo("brightness", 80)` のように指定します。Musicのドラムと楽器はブロックのメニュー引数として数値または式を渡します。
+完全な例は [examples/extensions.rk](examples/extensions.rk) を参照してください。
 
 ScratchのリストはRake配列とは別の名前付き資源です。`use Scratch.Generics.List as SList` を読み込み、モジュール直下で `var inventory: SList = SList.new()` と作ります。`inventory.add()` / `inventory.get()` のようなメソッド呼び出しをScratch標準のリストブロックへ変換し、`get` は `Scratch.Generics.Value` を返します。詳細と例は [examples/scratch_lists.rk](examples/scratch_lists.rk) を参照してください。
 

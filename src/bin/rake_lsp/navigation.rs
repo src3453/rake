@@ -98,7 +98,10 @@ fn hover_result(document: &Document, position: Position) -> Value {
                 .find(|block| block.name == name)
             {
                 let signature = format!("{}.{}", block.namespace, block.signature);
-                let detail = format!("```rake\n{signature}\n```\n\n{}", block.description);
+                let extension_note = block.extension.map(|extension| {
+                    format!("\n\nScratch extension `{extension}`; available in {}.", block.runtimes.join(" and "))
+                }).unwrap_or_default();
+                let detail = format!("```rake\n{signature}\n```\n\n{}{}", block.description, extension_note);
                 return json!({
                     "contents": {"kind": "markdown", "value": detail},
                     "range": {

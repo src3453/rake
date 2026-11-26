@@ -25,6 +25,7 @@ mod scene_tests {
     fn parses_stage_and_sprites_with_all_properties() {
         let source = r#"
 scene Game {
+    runtime: "turbowarp"
     stage {
         backdrops: ["bg.svg", ("night.png", 240, 180, 2)]
         current_backdrop: "night"
@@ -47,6 +48,7 @@ scene Game {
 }"#;
         let scene = parse_scene(source, None).expect("scene should parse");
         assert_eq!(scene.name, "Game");
+        assert_eq!(scene.runtime, Runtime::TurboWarp);
         assert_eq!(scene.stage.backdrops.len(), 2);
         assert_eq!(scene.stage.current_backdrop, 1);
         assert_eq!(scene.stage.backdrops[1].center, Some((240.0, 180.0)));
@@ -68,6 +70,8 @@ scene Game {
             ("scene A { sprite P {} sprite P {} }", "1:30: sprite \"P\" is already declared"),
             ("scene A {\n  sprite P { speed: 3 }\n}", "2:14: unknown property `speed` for a sprite"),
             ("scene A { sprite P { size: \"big\" } }", "1:28: `size` expects a number"),
+            ("scene A { runtime: \"scratchx\" }", "`runtime` must be \"scratch\" or \"turbowarp\""),
+            ("scene A { runtime: true }", "`runtime` expects \"scratch\" or \"turbowarp\""),
             ("scene A { sprite P { costume: \"a.txt\" } }", "unsupported file type"),
             ("scene A { sprite P { scripts: [\"a.js\"] } }", "must be a .rk source file"),
             ("scene A { stage {} stage {} }", "only one `stage` block"),
@@ -182,6 +186,27 @@ scene Game {
         let error = compile_scene(&directory.join("scenes/dup.rks")).err().unwrap();
         assert!(error.file.ends_with("b.rk"));
         assert!(error.message.contains("custom block \"work\""), "{}", error.message);
+    }
+
+    #[test]
+    fn scene_runtime_controls_script_compilation_and_extension_metadata() {
+        let directory = temp_project("runtime-extensions");
+        fs::write(
+            directory.join("src/player.rk"),
+            "use Scratch.Extension.Pen as Pen\nuse Scratch.Extension.Music as Music\nPen.clear()\nMusic.playNoteForBeats(60, 1)",
+        ).unwrap();
+        fs::write(
+            directory.join("scenes/main.rks"),
+            "scene Main { runtime: \"turbowarp\" sprite Player { scripts: [\"../src/player.rk\"] } }",
+        ).unwrap();
+
+        let compilation = compile_scene(&directory.join("scenes/main.rks")).expect("TurboWarp profile compiles");
+        assert_eq!(compilation.scene.runtime, Runtime::TurboWarp);
+        assert_eq!(compilation.project["extensions"], json!(["music", "pen"]));
+        let overlaid = compile_scene_for_runtime(&directory.join("scenes/main.rks"), Some(Runtime::Scratch))
+            .expect("CLI runtime override compiles");
+        assert_eq!(overlaid.scene.runtime, Runtime::Scratch);
+        assert_eq!(overlaid.project["extensions"], json!(["music", "pen"]));
     }
 
     #[test]

@@ -223,12 +223,26 @@ fn scene_completion_items(uri: &str, document: Option<&Document>, params: &Value
     // Inside an unterminated string: complete project file paths.
     if prefix.matches('"').count() % 2 == 1 {
         let start = prefix.rfind('"').map(|index| prefix[..=index].encode_utf16().count() as u32).unwrap_or(position.character);
-        let property = scene_source_tokens(&format!("{}\"", document.text_until(position)))
-            .ok()
-            .map(|tokens| scene_context(&tokens, position).1)
-            .unwrap_or(None)
+        let text_before_cursor = document.text_until(position);
+        let property_prefix = text_before_cursor
+            .rsplit_once('"')
+            .map(|(before, _)| before)
+            .unwrap_or(&text_before_cursor);
+        let property = property_prefix
+            .rsplit_once(':')
+            .and_then(|(prefix, _)| prefix.trim_end().split_whitespace().last())
             .unwrap_or_default();
-        let extensions: &[&str] = match property.as_str() {
+        if property == "runtime" {
+            return ["scratch", "turbowarp"]
+                .iter()
+                .map(|runtime| json!({
+                    "label": format!("\"{runtime}\""),
+                    "kind": 12,
+                    "textEdit": {"range": {"start": {"line": position.line, "character": start}, "end": {"line": position.line, "character": position.character}}, "newText": runtime}
+                }))
+                .collect();
+        }
+        let extensions: &[&str] = match property {
             "scripts" => &["rk"],
             "sounds" => &["wav", "mp3"],
             "rotation_style" => {
@@ -265,6 +279,7 @@ fn scene_completion_items(uri: &str, document: Option<&Document>, params: &Value
             "detail": "Declare the scene in this file"
         })],
         SceneContext::Scene => vec![
+            json!({"label": "runtime", "kind": 10, "detail": "runtime: \"scratch\" | \"turbowarp\"", "documentation": {"kind": "markdown", "value": "Choose the runtime profile used to validate extension blocks. Defaults to Scratch."}, "insertText": "runtime: \"${1|scratch,turbowarp|}\""}),
             json!({"label": "stage", "kind": 14, "insertTextFormat": 2, "insertText": "stage {\n\t$0\n}", "detail": "The Stage: backdrops, sounds, and Stage scripts"}),
             json!({"label": "sprite", "kind": 14, "insertTextFormat": 2, "insertText": "sprite ${1:Name} {\n\tcostume: \"$2\"\n\tposition: (0, 0)\n\tscripts: [\"$3\"]\n}", "detail": "A Sprite with costumes, initial state, and scripts"}),
         ],
@@ -288,6 +303,10 @@ fn scene_completion_items(uri: &str, document: Option<&Document>, params: &Value
             Some("visible") | Some("draggable") => ["true", "false"]
                 .iter()
                 .map(|value| json!({"label": value, "kind": 14}))
+                .collect(),
+            Some("runtime") => ["scratch", "turbowarp"]
+                .iter()
+                .map(|runtime| json!({"label": format!("\"{runtime}\""), "kind": 12}))
                 .collect(),
             Some("rotation_style") => ["all around", "left-right", "don't rotate"]
                 .iter()
@@ -324,6 +343,7 @@ fn scene_hover(uri: &str, document: &Document, position: Position) -> Value {
                     "scene" => "**scene** declares the one Scratch project described by this file.".to_string(),
                     "stage" => "**stage** configures the Scratch Stage: backdrops, sounds, and Stage scripts.".to_string(),
                     "sprite" => "**sprite** declares a Scratch Sprite with its costumes, initial state, and scripts.".to_string(),
+                    "runtime" => "**runtime** selects `scratch` or `turbowarp` for extension availability checks. The default is `scratch`; built-in Pen and Music blocks are available in both.".to_string(),
                     _ => return Value::Null,
                 }
             }

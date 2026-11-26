@@ -15,12 +15,14 @@ use zip::{CompressionMethod, ZipWriter};
 include!("compiler/lexer.rs");
 include!("compiler/types.rs");
 include!("compiler/parser.rs");
+include!("compiler/runtime.rs");
 
 // Scratch blocks stay grouped by namespace in the built-in catalog.
 include!("compiler/builtins.rs");
 include!("compiler/builtins/motion_blocks.rs");
 include!("compiler/builtins/looks_blocks.rs");
 include!("compiler/builtins/sound_blocks.rs");
+include!("compiler/builtins/extension_blocks.rs");
 include!("compiler/builtins/control_timing_blocks.rs");
 include!("compiler/builtins/event_blocks.rs");
 include!("compiler/builtins/control_clone_blocks.rs");

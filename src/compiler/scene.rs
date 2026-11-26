@@ -141,6 +141,7 @@ pub struct SceneSprite {
 pub struct SceneDocument {
     pub name: String,
     pub span: SceneSpan,
+    pub runtime: Runtime,
     pub stage: SceneStage,
     pub has_stage: bool,
     pub sprites: Vec<SceneSprite>,
@@ -294,10 +295,12 @@ impl SceneParser {
         let mut document = SceneDocument {
             name: name.text.clone(),
             span: SceneSpan::of(&name),
+            runtime: Runtime::Scratch,
             stage: SceneStage::default(),
             has_stage: false,
             sprites: Vec::new(),
         };
+        let mut runtime_declared = false;
         loop {
             if self.eat_symbol("}") {
                 break;
@@ -306,7 +309,24 @@ impl SceneParser {
             if token.kind == TokenKind::Eof {
                 return Err(diagnostic(&token, "expected \"}\" to close the scene"));
             }
-            if self.keyword("stage") {
+            if self.keyword("runtime") {
+                let token = self.advance();
+                if runtime_declared {
+                    return Err(diagnostic(&token, "property `runtime` is already set"));
+                }
+                self.expect_symbol(":")?;
+                let value = self.parse_value()?;
+                let SceneValue::Str(value_text) = &value.value else {
+                    return Err(value.span.diagnostic("`runtime` expects \"scratch\" or \"turbowarp\""));
+                };
+                let Some(runtime) = Runtime::parse(value_text) else {
+                    return Err(value.span.diagnostic("`runtime` must be \"scratch\" or \"turbowarp\""));
+                };
+                document.runtime = runtime;
+                runtime_declared = true;
+                self.eat_symbol(",");
+                self.eat_symbol(";");
+            } else if self.keyword("stage") {
                 self.advance();
                 if document.has_stage {
                     return Err(diagnostic(&token, "a scene can declare only one `stage` block"));
@@ -675,6 +695,8 @@ const SPRITE_ONLY_OPCODES: &[&str] = &[
     "looks_switchcostumeto", "looks_nextcostume", "looks_costumenumbername", "sensing_touchingobject",
     "sensing_touchingcolor", "sensing_coloristouchingcolor", "sensing_distanceto", "control_start_as_clone",
     "control_delete_this_clone", "event_whenthisspriteclicked", "sensing_setdragmode",
+    "pen_stamp", "pen_penDown", "pen_penUp", "pen_setPenColorToColor", "pen_changePenColorParamBy",
+    "pen_setPenColorParamTo", "pen_changePenSizeBy", "pen_setPenSizeTo",
 ];
 
 fn sprite_only_opcode(opcode: &str) -> bool {
@@ -821,14 +843,21 @@ struct TargetBuild {
 
 /// Compile a `.rks` scene file and every `.rk` script it references into one Scratch project.
 pub fn compile_scene(scene_path: &Path) -> Result<SceneCompilation, SceneError> {
+    compile_scene_for_runtime(scene_path, None)
+}
+
+pub fn compile_scene_for_runtime(scene_path: &Path, runtime_override: Option<Runtime>) -> Result<SceneCompilation, SceneError> {
     let source = fs::read_to_string(scene_path).map_err(|error| SceneError {
         file: scene_path.to_path_buf(),
         message: format!("1:1: cannot read {}: {error}", scene_path.display()),
     })?;
-    let scene = parse_scene(&source, Some(scene_path)).map_err(|message| SceneError {
+    let mut scene = parse_scene(&source, Some(scene_path)).map_err(|message| SceneError {
         file: scene_path.to_path_buf(),
         message,
     })?;
+    if let Some(runtime) = runtime_override {
+        scene.runtime = runtime;
+    }
     let base = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
     let mut stage_variables = VariableTable::default();
@@ -849,7 +878,7 @@ pub fn compile_scene(scene_path: &Path) -> Result<SceneCompilation, SceneError> 
                 file: scene_path.to_path_buf(),
                 message: script.span.diagnostic(format!("cannot read {:?}: {error}", script.path)),
             })?;
-            let unit = compile_unit(&script_source, false).map_err(|message| SceneError {
+            let unit = compile_unit(&script_source, false, scene.runtime).map_err(|message| SceneError {
                 file: script_path.clone(),
                 message,
             })?;
@@ -1194,6 +1223,7 @@ pub fn scene_document_json(scene: &SceneDocument) -> Value {
     let paths = |paths: &[ScenePath]| paths.iter().map(|path| json!(path.path)).collect::<Vec<_>>();
     json!({
         "name": scene.name,
+        "runtime": scene.runtime.as_str(),
         "hasStage": scene.has_stage,
         "stage": {
             "backdrops": scene.stage.backdrops.iter().map(asset).collect::<Vec<_>>(),

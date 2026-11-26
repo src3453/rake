@@ -112,7 +112,8 @@ mod decompiler_tests {
             "Motion.move(speed)",
             "if variable > 10 {",
             "send game_over",
-            "// [decompile] unsupported block `pen_clear` skipped",
+            "use Scratch.Extension.Pen as Pen",
+            "Pen.clear()",
             "var repeat_index: float = 0",
             "while repeat_index < 3 {",
             "Looks.say(\"hi \\\"there\\\"\")",
@@ -135,7 +136,7 @@ mod decompiler_tests {
         assert!(scene.contains("position: (-20, 35.5)"), "{scene}");
         assert!(scene.contains("rotation_style: \"left-right\""), "{scene}");
 
-        assert!(decompilation.warnings.iter().any(|warning| warning.contains("pen_clear")));
+        assert!(!decompilation.warnings.iter().any(|warning| warning.contains("pen_clear")));
         assert!(decompilation.warnings.iter().any(|warning| warning.contains("sprite-local variable \"speed\"")));
 
         // The recompiled project keeps the targets, variables, and custom block.
@@ -144,9 +145,10 @@ mod decompiler_tests {
         assert_eq!(targets[1]["name"], json!("Player_1"));
         let blocks = targets[1]["blocks"].as_object().unwrap();
         let opcodes = blocks.values().filter_map(|block| block["opcode"].as_str()).collect::<HashSet<_>>();
-        for opcode in ["procedures_definition", "sensing_keypressed", "data_addtolist", "event_broadcast", "motion_changeyby"] {
+        for opcode in ["procedures_definition", "sensing_keypressed", "data_addtolist", "event_broadcast", "motion_changeyby", "pen_clear"] {
             assert!(opcodes.contains(opcode), "missing {opcode}");
         }
+        assert_eq!(compiled.project["extensions"], json!(["pen"]));
         let prototype = blocks.values().find(|block| block["opcode"] == json!("procedures_prototype")).unwrap();
         assert_eq!(prototype["mutation"]["warp"], json!("true"));
     }

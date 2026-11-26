@@ -52,6 +52,51 @@ mod tests {
     }
 
     #[test]
+    fn compiles_pen_and_music_extensions_for_both_runtime_profiles() {
+        let source = r##"
+use Scratch.Extension.Pen as Pen
+use Scratch.Extension.Music as Music
+Pen.clear()
+Pen.setColor("#3366ff")
+Pen.changeColorParamBy("color", 10)
+Pen.setSizeTo(4)
+Pen.down()
+Pen.up()
+Music.setInstrument(1)
+Music.playDrumForBeats(2, 0.5)
+Music.restForBeats(0.25)
+Music.playNoteForBeats(60, 1)
+Music.changeTempoBy(10)
+Music.setTempoTo(120)
+var tempo: float = Music.tempo()
+"##;
+        for runtime in [Runtime::Scratch, Runtime::TurboWarp] {
+            let (project, _, _) = compile_source_for_runtime(source, runtime)
+                .unwrap_or_else(|error| panic!("{} profile should compile: {error}", runtime.as_str()));
+            assert_eq!(project["extensions"], json!(["music", "pen"]));
+            let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+            let opcodes = blocks.values().filter_map(|block| block["opcode"].as_str()).collect::<Vec<_>>();
+            for opcode in [
+                "pen_clear", "pen_setPenColorToColor", "pen_changePenColorParamBy", "pen_setPenSizeTo",
+                "pen_penDown", "pen_penUp", "music_setInstrument", "music_playDrumForBeats",
+                "music_restForBeats", "music_playNoteForBeats", "music_changeTempo", "music_setTempo", "music_getTempo",
+            ] {
+                assert!(opcodes.contains(&opcode), "missing {opcode}");
+            }
+            assert!(blocks.values().any(|block| block["opcode"] == "pen_menu_colorParam"));
+            assert!(blocks.values().any(|block| block["opcode"] == "music_menu_DRUM"));
+            assert!(blocks.values().any(|block| block["opcode"] == "music_menu_INSTRUMENT"));
+            assert!(blocks.values().any(|block| {
+                block["opcode"] == "music_playNoteForBeats"
+                    && block["inputs"]["NOTE"] == json!([1, [7, "60"]])
+            }));
+        }
+        assert!(compile_source("use Scratch.Extension.Music as Music\nMusic.playNoteForBeats(\"C4\", 1)")
+            .unwrap_err()
+            .contains("numeric MIDI note"));
+    }
+
+    #[test]
     fn resolves_unit_enum_variants_to_typed_numeric_tags() {
         let source = r#"
 enum State { Title, Playing, Paused }

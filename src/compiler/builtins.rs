@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BuiltinInputKind {
     Value,
+    Note,
     Boolean,
     Color,
     List,
@@ -29,6 +30,7 @@ struct BuiltinBlock {
     arguments: Vec<BuiltinArgument>,
     fields: Vec<(&'static str, &'static str)>,
     description: &'static str,
+    extension: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +41,8 @@ pub struct BuiltinBlockDescription {
     pub member: &'static str,
     pub signature: String,
     pub description: &'static str,
+    pub extension: Option<&'static str>,
+    pub runtimes: Vec<&'static str>,
 }
 
 fn builtin_arg(name: &'static str, input: &'static str, kind: BuiltinInputKind) -> BuiltinArgument {
@@ -102,6 +106,7 @@ fn builtin_block_entry(
         arguments,
         fields,
         description,
+        extension: None,
     }
 }
 
@@ -110,6 +115,12 @@ fn builtin_blocks() -> Vec<BuiltinBlock> {
     blocks.extend(motion_blocks());
     blocks.extend(looks_blocks());
     blocks.extend(sound_blocks());
+    let mut pen_blocks = pen_extension_blocks();
+    mark_extension(&mut pen_blocks, "pen");
+    blocks.extend(pen_blocks);
+    let mut music_blocks = music_extension_blocks();
+    mark_extension(&mut music_blocks, "music");
+    blocks.extend(music_blocks);
     blocks.extend(control_timing_blocks());
     blocks.extend(event_blocks());
     blocks.extend(control_clone_blocks());
@@ -141,6 +152,8 @@ pub fn builtin_block_descriptions() -> Vec<BuiltinBlockDescription> {
                             "bool"
                         } else if argument.kind == BuiltinInputKind::Color {
                             "text"
+                        } else if argument.kind == BuiltinInputKind::Note {
+                            "int"
                         } else if argument.kind == BuiltinInputKind::List {
                             "Scratch.Generics.List"
                         } else {
@@ -161,9 +174,24 @@ pub fn builtin_block_descriptions() -> Vec<BuiltinBlockDescription> {
                 member,
                 signature: format!("{member}({arguments}){result}"),
                 description: block.description,
+                extension: block.extension,
+                runtimes: [Runtime::Scratch, Runtime::TurboWarp]
+                    .into_iter()
+                    .filter(|runtime| match block.extension {
+                        Some(extension) => runtime.supports_extension(extension),
+                        None => true,
+                    })
+                    .map(Runtime::as_str)
+                    .collect(),
             }
         })
         .collect()
+}
+
+fn mark_extension(blocks: &mut [BuiltinBlock], extension: &'static str) {
+    for block in blocks {
+        block.extension = Some(extension);
+    }
 }
 
 fn builtin_block(name: &str) -> Option<BuiltinBlock> {

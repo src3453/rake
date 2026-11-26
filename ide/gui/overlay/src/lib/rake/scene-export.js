@@ -63,6 +63,7 @@ const list = (items, indent) => {
 /** Format a scene model as `.rks` source. */
 export const formatScene = scene => {
     const lines = [`// Exported from the Stage by the Rake IDE.`, `scene ${scene.name} {`];
+    if (scene.runtime && scene.runtime !== 'scratch') lines.push(`    runtime: "${scene.runtime}"`);
     const stage = scene.stage;
     lines.push('    stage {');
     if (stage.backdrops.length) {
@@ -213,7 +214,7 @@ export const exportStageToScene = async ({vm, api, project, scenePath, sceneName
         });
     }
 
-    const text = formatScene({name: safeIdentifier(sceneName), stage, sprites});
+    const text = formatScene({name: safeIdentifier(sceneName), runtime: previous && previous.runtime, stage, sprites});
     await api.writeFile(project, scenePath, text);
     return {text, written, skipped, sprites: sprites.map(sprite => sprite.name)};
 };

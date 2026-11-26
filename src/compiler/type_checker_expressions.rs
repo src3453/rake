@@ -413,6 +413,7 @@ impl TypeChecker {
             let valid = match spec.kind {
                 BuiltinInputKind::Boolean => actual == Type::Bool,
                 BuiltinInputKind::Color => actual == Type::Text,
+                BuiltinInputKind::Note => matches!(actual, Type::Int | Type::Float),
                 BuiltinInputKind::Value => !matches!(actual, Type::Class(_) | Type::ScratchList),
                 BuiltinInputKind::List => {
                     actual == Type::ScratchList
@@ -432,6 +433,7 @@ impl TypeChecker {
                 let expected = match spec.kind {
                     BuiltinInputKind::Boolean => "bool",
                     BuiltinInputKind::Color => "text",
+                    BuiltinInputKind::Note => "a numeric MIDI note",
                     BuiltinInputKind::Value => "Scratch value",
                     BuiltinInputKind::List => "Scratch.Generics.List resource",
                 };
@@ -638,6 +640,7 @@ impl TypeChecker {
                 let resolved_name = resolved_call.unwrap_or_else(|| name.clone());
                 *name = resolved_name.clone();
                 if let Some(block) = builtin_block(&resolved_name) {
+                    self.check_builtin_runtime(&block, &expression.token)?;
                     let Some(result_type) = block.result else {
                         return Err(diagnostic(
                             &expression.token,

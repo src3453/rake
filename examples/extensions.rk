@@ -1,0 +1,17 @@
+use Scratch.Events as Events
+use Scratch.Extension.Pen as Pen
+use Scratch.Extension.Music as Music
+
+event Events.greenFlag {
+    Pen.clear()
+    Pen.setColor("#3366ff")
+    Pen.setSizeTo(4)
+    Pen.down()
+    Scratch.Motion.move(100)
+    Pen.up()
+
+    Music.setInstrument(1)
+    Music.setTempoTo(120)
+    Music.playNoteForBeats(60, 1)
+    Music.restForBeats(0.25)
+}

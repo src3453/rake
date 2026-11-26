@@ -312,6 +312,7 @@ impl TypeChecker {
                 }
                 let resolved_name = self.resolve_name(name);
                 if let Some(block) = builtin_block(&resolved_name) {
+                    self.check_builtin_runtime(&block, token)?;
                     if block.result.is_some() {
                         return Err(diagnostic(
                             token,

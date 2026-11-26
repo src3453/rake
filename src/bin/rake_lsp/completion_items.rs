@@ -25,10 +25,16 @@ fn builtin_completion_item(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let extension_note = block.extension.map(|extension| {
+        format!(
+            " Scratch extension `{extension}`; available in {}.",
+            block.runtimes.join(" and ")
+        )
+    }).unwrap_or_default();
     json!({
         "label": label,
         "kind": 3,
-        "detail": format!("{}.{} — {}", block.namespace, block.signature, block.description),
+        "detail": format!("{}.{} — {}{}", block.namespace, block.signature, block.description, extension_note),
         "insertText": format!("{}({arguments})", insert_name),
         "insertTextFormat": 2,
         "sortText": format!("0-{label}")

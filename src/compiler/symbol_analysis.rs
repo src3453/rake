@@ -719,7 +719,7 @@ pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
     let mut statements = Parser::new(lex(source)?).parse()?;
     // Keep the bindings resolved before a type error so editor features remain
     // available while the user is correcting an otherwise syntactically valid file.
-    let _ = TypeChecker::new().check(&mut statements);
+    let _ = TypeChecker::new(Runtime::Scratch).check(&mut statements);
     let mut occurrences = Vec::new();
     collect_statement_symbols(source, &statements, &mut occurrences);
     let class_names = occurrences

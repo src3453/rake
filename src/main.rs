@@ -11,11 +11,12 @@ struct CliOptions {
     json_path: Option<PathBuf>,
     json_errors: bool,
     print_scene: bool,
+    runtime: Option<rake::Runtime>,
 }
 
 fn usage() {
     eprintln!(
-        "Usage: rake <source.rk|scene.rks> [-o <output.sb3>] [--emit-ir <output.ir>] [--emit-json <output.json>] [--json-errors] [--print-scene]"
+        "Usage: rake <source.rk|scene.rks> [-o <output.sb3>] [--runtime <scratch|turbowarp>] [--emit-ir <output.ir>] [--emit-json <output.json>] [--json-errors] [--print-scene]"
     );
     eprintln!(
         "A .rks scene compiles the Stage, its Sprites, their assets, and every referenced .rk script into one project."
@@ -51,7 +52,9 @@ where
                 set_once(&mut output, path, &argument)?;
             }
             "--force" => force = true,
-            _ if input.is_none() && !argument.starts_with('-') => input = Some(PathBuf::from(argument)),
+            _ if input.is_none() && !argument.starts_with('-') => {
+                input = Some(PathBuf::from(argument))
+            }
             _ => return Err(format!("unexpected argument {argument:?}")),
         }
     }
@@ -124,7 +127,7 @@ where
         .ok_or_else(|| format!("missing path after {option}"))
 }
 
-fn set_once(slot: &mut Option<PathBuf>, value: PathBuf, option: &str) -> Result<(), String> {
+fn set_once<T>(slot: &mut Option<T>, value: T, option: &str) -> Result<(), String> {
     if slot.is_some() {
         return Err(format!("{option} may only be specified once"));
     }
@@ -148,6 +151,7 @@ where
         json_path: None,
         json_errors: false,
         print_scene: false,
+        runtime: None,
     };
 
     while let Some(option) = args.next() {
@@ -164,6 +168,13 @@ where
                 let path = take_path(&mut args, &option)?;
                 set_once(&mut options.json_path, path, &option)?;
             }
+            "--runtime" => {
+                let value = args.next().ok_or("missing runtime after --runtime")?;
+                let runtime = rake::Runtime::parse(&value).ok_or_else(|| {
+                    format!("unknown runtime {value:?}; expected \"scratch\" or \"turbowarp\"")
+                })?;
+                set_once(&mut options.runtime, runtime, &option)?;
+            }
             "--json-errors" => options.json_errors = true,
             "--print-scene" => options.print_scene = true,
             _ => return Err(format!("unexpected argument {option:?}")),
@@ -175,7 +186,9 @@ where
         && options.json_path.is_none()
         && !options.print_scene
     {
-        return Err("missing output option (-o, --emit-ir, --emit-json, or --print-scene)".to_string());
+        return Err(
+            "missing output option (-o, --emit-ir, --emit-json, or --print-scene)".to_string(),
+        );
     }
     Ok(options)
 }
@@ -198,7 +211,9 @@ fn report_error(file: &std::path::Path, message: &str, json_errors: bool) {
         let line = parts.next().and_then(|part| part.parse::<usize>().ok());
         let column = parts.next().and_then(|part| part.parse::<usize>().ok());
         let (line, column, detail) = match (line, column) {
-            (Some(line), Some(column)) => (line, column, parts.next().unwrap_or("").trim().to_string()),
+            (Some(line), Some(column)) => {
+                (line, column, parts.next().unwrap_or("").trim().to_string())
+            }
             _ => (1, 1, message.to_string()),
         };
         eprintln!(
@@ -208,7 +223,10 @@ fn report_error(file: &std::path::Path, message: &str, json_errors: bool) {
         return;
     }
     let source = fs::read_to_string(file).unwrap_or_default();
-    eprint!("{}", rake::render_diagnostic(&file.to_string_lossy(), &source, message));
+    eprint!(
+        "{}",
+        rake::render_diagnostic(&file.to_string_lossy(), &source, message)
+    );
 }
 
 fn run() -> ExitCode {
@@ -259,7 +277,10 @@ fn run() -> ExitCode {
         let source = match fs::read_to_string(&options.source_path) {
             Ok(source) => source,
             Err(error) => {
-                eprintln!("error: cannot read {}: {error}", options.source_path.display());
+                eprintln!(
+                    "error: cannot read {}: {error}",
+                    options.source_path.display()
+                );
                 return ExitCode::FAILURE;
             }
         };
@@ -276,8 +297,15 @@ fn run() -> ExitCode {
     }
 
     let compilation = if is_scene {
-        rake::compile_scene(&options.source_path)
-            .map(|compilation| (compilation.project, compilation.assets, compilation.block_count, None))
+        rake::compile_scene_for_runtime(&options.source_path, options.runtime)
+            .map(|compilation| {
+                (
+                    compilation.project,
+                    compilation.assets,
+                    compilation.block_count,
+                    None,
+                )
+            })
             .map_err(|error| (error.file, error.message))
     } else {
         let source = match fs::read_to_string(&options.source_path) {
@@ -291,16 +319,17 @@ fn run() -> ExitCode {
             }
         };
         if options.ir_path.is_some() {
-            rake::compile_source_with_ir(&source).map(|compilation| {
-                (
-                    compilation.project,
-                    compilation.assets,
-                    compilation.block_count,
-                    Some(compilation.ir),
-                )
-            })
+            rake::compile_source_with_ir_for_runtime(&source, options.runtime.unwrap_or_default())
+                .map(|compilation| {
+                    (
+                        compilation.project,
+                        compilation.assets,
+                        compilation.block_count,
+                        Some(compilation.ir),
+                    )
+                })
         } else {
-            rake::compile_source(&source)
+            rake::compile_source_for_runtime(&source, options.runtime.unwrap_or_default())
                 .map(|(project, assets, block_count)| (project, assets, block_count, None))
         }
         .map_err(|message| (options.source_path.clone(), message))
@@ -375,6 +404,27 @@ mod tests {
         let scene = parse_args(args(&["scene.rks", "-o", "scene.sb3", "--json-errors"]))
             .expect("scenes and JSON errors should be accepted");
         assert!(scene.json_errors);
+        assert_eq!(scene.runtime, None);
+        let runtime = parse_args(args(&[
+            "program.rk",
+            "--runtime",
+            "turbowarp",
+            "--emit-json",
+            "program.json",
+        ]))
+        .expect("runtime profile should be accepted");
+        assert_eq!(runtime.runtime, Some(rake::Runtime::TurboWarp));
+        assert!(
+            parse_args(args(&[
+                "program.rk",
+                "--runtime",
+                "scratchx",
+                "-o",
+                "program.sb3"
+            ]))
+            .unwrap_err()
+            .contains("unknown runtime")
+        );
     }
 
     #[test]
@@ -384,8 +434,16 @@ mod tests {
         assert_eq!(options.input, PathBuf::from("game.sb3"));
         assert_eq!(options.output, PathBuf::from("out"));
         assert!(options.force);
-        assert!(parse_decompile_args(args(&["game.sb3"])).unwrap_err().contains("missing output directory"));
-        assert!(parse_decompile_args(args(&["-o", "out"])).unwrap_err().contains("missing .sb3"));
+        assert!(
+            parse_decompile_args(args(&["game.sb3"]))
+                .unwrap_err()
+                .contains("missing output directory")
+        );
+        assert!(
+            parse_decompile_args(args(&["-o", "out"]))
+                .unwrap_err()
+                .contains("missing .sb3")
+        );
     }
 
     #[test]

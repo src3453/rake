@@ -1,7 +1,7 @@
 use rake::{
-    SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols, builtin_block_descriptions,
-    builtin_event_descriptions, compile_source, parse_scene, scene_property_descriptions,
-    scene_source_tokens, source_tokens, SCENE_KEYWORDS,
+    SCENE_KEYWORDS, SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols,
+    builtin_block_descriptions, builtin_event_descriptions, compile_source, parse_scene,
+    scene_property_descriptions, scene_source_tokens, source_tokens,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};

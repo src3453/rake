@@ -521,12 +521,19 @@ impl<'a> Renderer<'a> {
                         arguments.push(rake_string("#000000"));
                     }
                 }
+                BuiltinInputKind::Note => arguments.push(self.value_input(block, spec.input).text),
                 BuiltinInputKind::Value => arguments.push(self.value_input(block, spec.input).text),
             }
         }
         let (namespace, member) = builtin.name.rsplit_once('.')?;
         if let Some(list) = receiver {
             return Some(format!("{list}.{member}({})", arguments.join(", ")));
+        }
+        if let Some(extension_path) = namespace.strip_prefix("Scratch.Extension.") {
+            let alias = extension_path.rsplit('.').next()?;
+            self.used_namespaces
+                .insert(format!("Extension.{extension_path} as {alias}"));
+            return Some(format!("{alias}.{member}({})", arguments.join(", ")));
         }
         let short = namespace.strip_prefix("Scratch.").unwrap_or(namespace).to_string();
         self.used_namespaces.insert(short.clone());

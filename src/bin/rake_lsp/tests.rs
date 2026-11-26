@@ -654,6 +654,26 @@ mod tests {
     }
 
     #[test]
+    fn completes_and_documents_pen_and_music_extension_blocks() {
+        let pen_source = "Scratch.Extension.Pen.";
+        let pen = completion_at(pen_source, pen_source.len());
+        let down = pen.iter().find(|item| item["label"] == "down").unwrap();
+        assert!(pen.iter().any(|item| item["label"] == "clear"));
+        assert!(down["detail"].as_str().unwrap().contains("Scratch extension `pen`"));
+        assert!(down["detail"].as_str().unwrap().contains("scratch and turbowarp"));
+
+        let music_source = "Scratch.Extension.Music.";
+        let music = completion_at(music_source, music_source.len());
+        assert!(music.iter().any(|item| item["label"] == "playNoteForBeats"));
+        assert!(music.iter().any(|item| item["label"] == "tempo"));
+
+        let text = "Scratch.Extension.Music.playNoteForBeats(60, 1)";
+        let hover = hover_result(&document(text), Position { line: 0, character: 31 });
+        assert!(hover["contents"]["value"].as_str().unwrap().contains("Scratch extension `music`"));
+        assert_eq!(semantic_type_at(text, 0, 24), Some(5));
+    }
+
+    #[test]
     fn macros_are_suggested_and_highlighted() {
         let source = "macro! twice (value) { value + value }\ntw";
         let completions = completion_at(source, source.len());
@@ -710,7 +730,8 @@ mod tests {
 
         assert_eq!(scene_completion_labels("", 0, 0), vec!["scene"]);
         assert_eq!(scene_completion_labels("scene Main {
-  ", 1, 2), vec!["stage", "sprite"]);
+  ", 1, 2), vec!["runtime", "stage", "sprite"]);
+        assert_eq!(scene_completion_labels("scene Main { runtime: \"", 0, 23), vec!["\"scratch\"", "\"turbowarp\""]);
         let sprite = scene_completion_labels("scene Main {
   sprite P {
     ", 2, 4);
@@ -722,6 +743,8 @@ mod tests {
     ", 3, 4);
         assert!(stage.contains(&"backdrops".to_string()) && !stage.contains(&"position".to_string()));
         assert_eq!(scene_completion_labels("scene Main { sprite P { visible: ", 0, 33), vec!["true", "false"]);
+        let runtime_hover = scene_hover("untitled:main.rks", &document("scene Main { runtime: \"turbowarp\" }"), Position { line: 0, character: 16 });
+        assert!(runtime_hover["contents"]["value"].as_str().unwrap().contains("extension availability"));
 
         let symbols = scene_document_symbols(&document("scene Main {
   stage {}

@@ -55,12 +55,20 @@ pub struct Compilation {
 }
 
 pub fn compile_source(source: &str) -> Result<(Value, Vec<(String, Vec<u8>)>, usize), String> {
-    let (project, assets, block_count, _) = compile_source_internal(source, false)?;
+    compile_source_for_runtime(source, Runtime::Scratch)
+}
+
+pub fn compile_source_for_runtime(source: &str, runtime: Runtime) -> Result<(Value, Vec<(String, Vec<u8>)>, usize), String> {
+    let (project, assets, block_count, _) = compile_source_internal(source, false, runtime)?;
     Ok((project, assets, block_count))
 }
 
 pub fn compile_source_with_ir(source: &str) -> Result<Compilation, String> {
-    let (project, assets, block_count, ir) = compile_source_internal(source, true)?;
+    compile_source_with_ir_for_runtime(source, Runtime::Scratch)
+}
+
+pub fn compile_source_with_ir_for_runtime(source: &str, runtime: Runtime) -> Result<Compilation, String> {
+    let (project, assets, block_count, ir) = compile_source_internal(source, true, runtime)?;
     Ok(Compilation {
         project,
         assets,
@@ -80,10 +88,10 @@ struct CompiledUnit {
     ir: Option<String>,
 }
 
-fn compile_unit(source: &str, emit_ir: bool) -> Result<CompiledUnit, String> {
+fn compile_unit(source: &str, emit_ir: bool, runtime: Runtime) -> Result<CompiledUnit, String> {
     let tokens = expand_macros(lex(source)?)?;
     let mut statements = Parser::new(tokens).parse()?;
-    let mut symbols = TypeChecker::new().check(&mut statements)?;
+    let mut symbols = TypeChecker::new(runtime).check(&mut statements)?;
     lower_function_calls(&mut statements, &mut symbols)?;
     let ir = emit_ir.then(|| {
         format!("Rake IR (typed syntax tree after function-call lowering)
@@ -192,8 +200,22 @@ fn stage_target(variables: Map<String, Value>, lists: Map<String, Value>, broadc
 }
 
 fn project_document(targets: Vec<Value>) -> Value {
+    let mut extensions = std::collections::BTreeSet::new();
+    for target in &targets {
+        if let Some(blocks) = target.get("blocks").and_then(Value::as_object) {
+            for block in blocks.values() {
+                if let Some(opcode) = block.get("opcode").and_then(Value::as_str) {
+                    if opcode.starts_with("pen_") {
+                        extensions.insert("pen");
+                    } else if opcode.starts_with("music_") {
+                        extensions.insert("music");
+                    }
+                }
+            }
+        }
+    }
     json!({
-        "targets": targets, "monitors": [], "extensions": [],
+        "targets": targets, "monitors": [], "extensions": extensions,
         "meta": {"semver": "3.0.0", "vm": "15.3.0", "agent": "Rake compiler"}
     })
 }
@@ -201,8 +223,9 @@ fn project_document(targets: Vec<Value>) -> Value {
 fn compile_source_internal(
     source: &str,
     emit_ir: bool,
+    runtime: Runtime,
 ) -> Result<(Value, Vec<(String, Vec<u8>)>, usize, Option<String>), String> {
-    let unit = compile_unit(source, emit_ir)?;
+    let unit = compile_unit(source, emit_ir, runtime)?;
     let stage = stage_target(
         unit.stage_variables,
         unit.stage_lists,

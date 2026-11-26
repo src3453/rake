@@ -148,6 +148,41 @@
     "body": "use Scratch.Motion.{move, rotate, rotateCW, rotateCCW}",
     "description": "Import selected Scratch Motion blocks"
   },
+  "Import Scratch Pen extension": {
+    "prefix": "usepen",
+    "body": "use Scratch.Extension.Pen as Pen",
+    "description": "Import Scratch's Pen extension blocks"
+  },
+  "Import Scratch Music extension": {
+    "prefix": "usemusic",
+    "body": "use Scratch.Extension.Music as Music",
+    "description": "Import Scratch's Music extension blocks"
+  },
+  "Draw with the Pen extension": {
+    "prefix": "pendraw",
+    "body": [
+      "use Scratch.Extension.Pen as Pen",
+      "",
+      "Pen.clear()",
+      "Pen.setColor(\"#3366ff\")",
+      "Pen.setSizeTo(4)",
+      "Pen.down()",
+      "Scratch.Motion.move(100)",
+      "Pen.up()"
+    ],
+    "description": "Clear the pen layer and draw a line"
+  },
+  "Play a Music extension note": {
+    "prefix": "musicnote",
+    "body": [
+      "use Scratch.Extension.Music as Music",
+      "",
+      "Music.setInstrument(1)",
+      "Music.setTempoTo(120)",
+      "Music.playNoteForBeats(${1:60}, ${2:1})"
+    ],
+    "description": "Play a note using the Music extension"
+  },
   "Function call": {
     "prefix": "call",
     "body": "${1:functionName}(${2:argument})",
