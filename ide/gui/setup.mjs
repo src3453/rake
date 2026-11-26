@@ -1,7 +1,9 @@
 // Prepares and builds the Rake IDE editor from TurboWarp's scratch-gui.
 //
-//   node gui/setup.mjs           clone (pinned commit), install, apply Rake changes, build
-//   node gui/setup.mjs --build   re-apply Rake changes and rebuild only
+//   bun gui/setup.mjs           clone (pinned commit), install, apply Rake changes, build
+//   bun gui/setup.mjs --build   re-apply Rake changes and rebuild only
+//
+// Dependencies are installed with Bun and webpack runs on the Bun runtime.
 //
 // The TurboWarp checkout lives in ide/gui/scratch-gui (not committed). Rake's changes are
 // ide/gui/overlay (new files copied in) and ide/gui/patches/*.patch (edits to GUI files).
@@ -37,9 +39,19 @@ if (!buildOnly) {
     run('git', ['fetch', '--depth', '1', 'origin', TURBOWARP_COMMIT], {cwd: checkout});
     // Discard earlier Rake edits so the patch applies to clean files.
     run('git', ['checkout', '--force', TURBOWARP_COMMIT], {cwd: checkout});
-    // TurboWarp depends on its own GitHub forks of scratch-vm, scratch-blocks, etc.
-    // npm 12 refuses git dependencies unless they are allowed for this install.
-    run('npm', ['ci', '--allow-git=all', '--no-audit', '--no-fund'], {cwd: checkout});
+    // Bun migrates TurboWarp's package-lock.json, keeping its exact versions. The lock's
+    // integrity hashes for TurboWarp's GitHub forks (scratch-render, scratch-paint, ...) are
+    // hashes of npm-packed tarballs, which never match the GitHub archives Bun downloads,
+    // so drop them; those packages stay pinned by commit in `resolved`.
+    const lockPath = path.join(checkout, 'package-lock.json');
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    for (const entry of Object.values(lock.packages || {})) {
+        if (String(entry.resolved || '').startsWith('git+')) delete entry.integrity;
+    }
+    fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}
+`);
+    fs.rmSync(path.join(checkout, 'bun.lock'), {force: true});
+    run('bun', ['install'], {cwd: checkout});
 }
 
 // Copy Rake's own source files into the checkout.
@@ -56,7 +68,7 @@ for (const patch of fs.readdirSync(path.join(here, 'patches')).filter(name => na
     run('git', ['apply', ...flags, file], {cwd: checkout});
 }
 
-run('npx', ['webpack', '--bail'], {
+run('bun', ['x', '--bun', 'webpack', '--bail'], {
     cwd: checkout,
     env: {...process.env, CI: '1', NODE_ENV: production ? 'production' : 'development'}
 });

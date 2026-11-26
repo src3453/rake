@@ -4,15 +4,15 @@ TurboWarpのScratchエディターをベースにしたRakeの開発環境です
 
 ## セットアップと起動
 
-Rust (Cargo)、Node.js 24、Gitが必要です。
+Rust (Cargo)、[Bun](https://bun.sh/) 1.4以降、Gitが必要です。Node.jsとnpmは使いません。
 
 ```sh
 cd ide
-npm run setup   # TurboWarp scratch-guiを取得・ビルドし、サーバー依存とRakeのバイナリを用意
-npm start       # http://localhost:8610/ を開く
+bun run setup   # TurboWarp scratch-guiを取得・ビルドし、サーバー依存とRakeのバイナリを用意
+bun start       # http://localhost:8610/ を開く
 ```
 
-`npm run setup` は TurboWarp/scratch-gui の固定コミットを `ide/gui/scratch-gui` に取得し（Gitには含めません）、`ide/gui/overlay` のファイルを追加し、`ide/gui/patches/*.patch` を適用してからwebpackでビルドします。TurboWarpはscratch-vmなどを自前のGitHubフォークから取得するため、このインストールに限り `npm ci --allow-git=all` を使います。IDEのコードだけを変更した場合は `npm run build:gui` で再ビルドできます。
+`bun run setup` は TurboWarp/scratch-gui の固定コミットを `ide/gui/scratch-gui` に取得し（Gitには含めません）、`ide/gui/overlay` のファイルを追加し、`ide/gui/patches/*.patch` を適用してから、Bun上でwebpackを動かしてビルドします。依存関係は `bun install` で入れ、TurboWarpの `package-lock.json` をBunの形式に変換するため、npmと同じバージョンになります。ただし、TurboWarpのGitHubフォーク（scratch-renderなど）に付いているnpm用の整合性ハッシュはBunが取得するアーカイブと一致しないので、これだけは削除します。これらのパッケージはコミットで固定されたままです。IDEのコードだけを変更した場合は `bun run build:gui` で再ビルドできます。
 
 プロジェクトは `~/RakeProjects`（環境変数 `RAKE_PROJECTS_DIR` で変更可）に保存されます。初回起動時に空ならサンプルプロジェクトを作ります。ポートは `PORT`、コンパイラーと言語サーバーは `RAKE_BIN` / `RAKE_LSP_BIN` で指定でき、未指定ならリポジトリの `target/` にある新しい方のビルドを使います。サーバーは `127.0.0.1` だけで待ち受け、他サイトからの書き込み要求とWebSocket接続を拒否します。
 
@@ -35,7 +35,7 @@ Scratchのブロックエディターで直接作ったスクリプトはRakeの
 ## テスト
 
 ```sh
-cd ide && npm test
+cd ide && bun run test
 ```
 
 ## ライセンス

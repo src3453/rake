@@ -233,7 +233,7 @@ export const createServer = ({
             if (!file.startsWith(guiDirectory)) throw new ProjectError(403, 'Forbidden');
             if (!fs.existsSync(guiDirectory)) {
                 response.writeHead(503, {'Content-Type': 'text/plain; charset=utf-8'});
-                response.end(`The IDE has not been built yet. Run \`npm run setup\` in ide/ (missing ${guiDirectory}).`);
+                response.end(`The IDE has not been built yet. Run \`bun run setup\` in ide/ (missing ${guiDirectory}).`);
                 return;
             }
             serveFile(response, file);
