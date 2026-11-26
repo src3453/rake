@@ -1,4 +1,5 @@
-.ide {
+.ide,
+.collapsed-bar {
     --rake-bg: #ffffff;
     --rake-panel: #f3f5f9;
     --rake-border: hsla(0, 0%, 0%, 0.15);
@@ -9,7 +10,9 @@
     --rake-accent: #4c97ff;
     --rake-ok: #2e8540;
     --rake-error: #e5463b;
+}
 
+.ide {
     position: relative;
     flex-shrink: 0;
     display: flex;
@@ -417,4 +420,68 @@
     font-size: 1rem;
     padding: 4px 6px;
     cursor: pointer;
+}
+
+.collapsed-bar .status-error {
+    margin-top: 6px;
+    text-align: center;
+}
+
+/* Code mode: the panel takes the place of the Scratch editor. */
+.ide-code {
+    flex: 1 1 auto;
+    width: auto;
+    margin-left: 0;
+}
+
+.layout-switch {
+    display: flex;
+    border: 1px solid var(--rake-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.ide .layout-switch button,
+.layout-switch button {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    border: none;
+    border-radius: 0;
+    padding: 2px 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.layout-switch button + button {
+    border-left: 1px solid var(--rake-border);
+}
+
+.layout-switch-vertical {
+    flex-direction: column;
+    background: var(--rake-bg);
+}
+
+.layout-switch-vertical button + button {
+    border-left: none;
+    border-top: 1px solid var(--rake-border);
+}
+
+.layout-switch-vertical button {
+    justify-content: center;
+    min-width: 2rem;
+    padding: 6px 4px;
+}
+
+.ide .layout-switch .layout-active,
+.layout-switch .layout-active {
+    background: var(--rake-accent);
+    color: #fff;
+}
+
+.layout-icon {
+    font-family: Consolas, Menlo, monospace;
+    font-size: 11px;
 }

@@ -53,8 +53,13 @@ const messages = {
         serverMissing: 'Cannot reach the Rake IDE server. Start it with `npm start` in ide/server.',
         binaryFile: 'This file is binary and cannot be edited here.',
         stageChanged: 'The Stage has changes that are not in the scene file',
-        hidePanel: 'Hide code panel',
-        showPanel: 'Show code panel',
+        layout: 'Layout',
+        layoutBlocks: 'Blocks',
+        layoutSplit: 'Split',
+        layoutCode: 'Code',
+        layoutBlocksTooltip: 'Blocks mode: hide the code editor and use the full Scratch block editor',
+        layoutSplitTooltip: 'Split mode: blocks, code editor and stage side by side',
+        layoutCodeTooltip: 'Code mode: the code editor takes over the block editor area',
         restoreRunning: 'Keep running after rebuild'
     },
     ja: {
@@ -109,8 +114,13 @@ const messages = {
         serverMissing: 'Rake IDE サーバーに接続できません。ide/server で `npm start` を実行してください。',
         binaryFile: 'バイナリファイルはここでは編集できません。',
         stageChanged: 'ステージにシーンファイルへ未反映の変更があります',
-        hidePanel: 'コードパネルを隠す',
-        showPanel: 'コードパネルを表示',
+        layout: 'レイアウト',
+        layoutBlocks: 'ブロック',
+        layoutSplit: '分割',
+        layoutCode: 'コード',
+        layoutBlocksTooltip: 'ブロックモード: コードエディタを隠し、Scratchのブロック画面を広く使う',
+        layoutSplitTooltip: '分割モード: ブロック・コードエディタ・ステージを横に並べる',
+        layoutCodeTooltip: 'コードモード: コードエディタがブロック画面の場所を使う',
         restoreRunning: '再ビルド後も実行を続ける'
     }
 };

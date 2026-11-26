@@ -108,11 +108,10 @@ export const loadMonaco = () => {
     if (monacoPromise) return monacoPromise;
     monacoPromise = (async () => {
         const base = `${location.origin}/monaco/vs`;
+        // Monaco is served from the IDE server's own origin, so the worker script loads directly
+        // (it finds the rest of Monaco relative to its own URL).
         window.MonacoEnvironment = {
-            getWorkerUrl: () => `data:text/javascript;charset=utf-8,${encodeURIComponent(
-                `self.MonacoEnvironment = {baseUrl: '${location.origin}/monaco/'};` +
-                `importScripts('${base}/base/worker/workerMain.js');`
-            )}`
+            getWorkerUrl: () => `${base}/base/worker/workerMain.js`
         };
         await loadScript(`${base}/loader.js`);
         const amdRequire = window.require;
