@@ -5,6 +5,9 @@ struct Token {
     line: usize,
     column: usize,
     source_length: usize,
+    /// The module this token was read from. `0` is the entry file being compiled;
+    /// library modules loaded through `from "..." use` get their own IDs.
+    file: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +45,7 @@ impl Token {
             text,
             line,
             column,
+            file: 0,
         }
     }
 
@@ -54,8 +58,36 @@ impl Token {
     }
 }
 
+/// Separates the module ID that prefixes diagnostics raised inside library modules.
+const MODULE_DIAGNOSTIC_MARK: char = '\u{1}';
+
 fn diagnostic(token: &Token, message: impl AsRef<str>) -> String {
-    format!("{}:{}: {}", token.line, token.column, message.as_ref())
+    let located = format!("{}:{}: {}", token.line, token.column, message.as_ref());
+    if token.file == 0 {
+        located
+    } else {
+        module_diagnostic(token.file, located)
+    }
+}
+
+/// Tag a `line:column: message` diagnostic with the library module it belongs to.
+fn module_diagnostic(file: u32, message: String) -> String {
+    if file == 0 || message.starts_with(MODULE_DIAGNOSTIC_MARK) {
+        return message;
+    }
+    format!("{MODULE_DIAGNOSTIC_MARK}{file}{MODULE_DIAGNOSTIC_MARK}{message}")
+}
+
+/// Split a diagnostic into its library module ID (`0` for the entry file) and the plain message.
+fn split_module_diagnostic(message: &str) -> (u32, &str) {
+    if let Some(rest) = message.strip_prefix(MODULE_DIAGNOSTIC_MARK) {
+        if let Some((file, message)) = rest.split_once(MODULE_DIAGNOSTIC_MARK) {
+            if let Ok(file) = file.parse() {
+                return (file, message);
+            }
+        }
+    }
+    (0, message)
 }
 
 fn lex(source: &str) -> Result<Vec<Token>, String> {

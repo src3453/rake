@@ -308,31 +308,26 @@ fn run() -> ExitCode {
             })
             .map_err(|error| (error.file, error.message))
     } else {
-        let source = match fs::read_to_string(&options.source_path) {
-            Ok(source) => source,
-            Err(error) => {
-                eprintln!(
-                    "error: cannot read {}: {error}",
-                    options.source_path.display()
-                );
-                return ExitCode::FAILURE;
-            }
-        };
+        let runtime = options.runtime.unwrap_or_default();
         if options.ir_path.is_some() {
-            rake::compile_source_with_ir_for_runtime(&source, options.runtime.unwrap_or_default())
-                .map(|compilation| {
-                    (
-                        compilation.project,
-                        compilation.assets,
-                        compilation.block_count,
-                        Some(compilation.ir),
-                    )
-                })
+            rake::compile_file_with_ir_for_runtime(&options.source_path, runtime).map(|compilation| {
+                (
+                    compilation.project,
+                    compilation.assets,
+                    compilation.block_count,
+                    Some(compilation.ir),
+                )
+            })
         } else {
-            rake::compile_source_for_runtime(&source, options.runtime.unwrap_or_default())
+            rake::compile_file_for_runtime(&options.source_path, runtime)
                 .map(|(project, assets, block_count)| (project, assets, block_count, None))
         }
-        .map_err(|message| (options.source_path.clone(), message))
+        .map_err(|error| {
+            (
+                error.file.unwrap_or_else(|| options.source_path.clone()),
+                error.message,
+            )
+        })
     };
     let (project, assets, block_count, ir) = match compilation {
         Ok(compiled) => compiled,

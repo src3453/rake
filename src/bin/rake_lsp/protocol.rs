@@ -15,6 +15,8 @@ const TOKEN_MODIFIERS: &[&str] = &["declaration", "definition", "readonly", "mod
 struct Document {
     text: String,
     version: Option<i64>,
+    /// The file on disk, used to resolve `from` library imports.
+    path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

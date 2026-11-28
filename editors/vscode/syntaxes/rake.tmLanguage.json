@@ -26,7 +26,9 @@
     },
     "namespaces": {
       "patterns": [
+        {"name": "keyword.control.namespace.rake", "match": "\\bfrom(?=\\s*\")"},
         {"name": "keyword.control.namespace.rake", "match": "\\b(ns|use|as)\\b"},
+        {"name": "keyword.operator.wildcard.rake", "match": "(?<=\\buse\\s)\\*|(?<=\\.)\\*"},
         {"name": "support.namespace.rake", "match": "\\bScratch(?:\\.[A-Z][A-Za-z0-9_]*)*"},
         {"name": "entity.name.namespace.rake", "match": "(?<=\\bns\\s)[A-Za-z_][A-Za-z0-9_]*"}
       ]

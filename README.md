@@ -189,7 +189,34 @@ Scratch.Looks.say("Hello!")
 var x: float = Scratch.Motion.xPosition()
 ```
 
-`use Scratch.Motion` は `Motion` という名前で名前空間を取り込みます。`use Scratch.Motion as motion` で別名を指定できます。`use Scratch.Motion.{move, rotate}` は選んだブロックを直接呼び出せるようにし、`use Scratch.Motion as motion.{move, rotate}` は選んだブロックを `motion.move()` / `motion.rotate()` として使えるようにします。`use Scratch.Motion.move as move` のように単一の関数やクラスに別名を付けることもできます。
+`use Scratch.Motion` は `Motion` という名前で名前空間を取り込みます。`use Scratch.Motion as motion` で別名を指定できます。`use Scratch.Motion.{move, rotate}` は選んだブロックを直接呼び出せるようにし、`use Scratch.Motion as motion.{move, rotate}` は選んだブロックを `motion.move()` / `motion.rotate()` として使えるようにします。`use Scratch.Motion.move as move` のように単一の関数やクラスに別名を付けることもできます。`use Scratch.Motion.*` は名前空間の直下にある宣言をすべて、末尾の名前で取り込みます。
+
+### ライブラリ
+
+別ファイルの宣言は `from "<パス>" use ...` で読み込みます。パスはプロジェクトルート（`rake-ide.json` があるディレクトリ。なければコンパイルするファイルのディレクトリ）からの相対パスで、`.rk` は省略できます。
+
+```rake
+// lib/math.rk
+ns MathUtil {
+    fn clamp(value: int, low: int, high: int) -> int {
+        if value < low { return low }
+        if value > high { return high }
+        return value
+    }
+}
+```
+
+```rake
+// src/player.rk
+from "lib/math" use MathUtil.clamp
+use Scratch.Events.*
+
+event greenFlag {
+    Scratch.Looks.say(clamp(42, 0, 10))
+}
+```
+
+`from "lib/math" use *` は、ライブラリのトップレベルにある宣言をすべて取り込みます。参照できるのは、そのファイルが直接 `from` したライブラリの宣言だけです（ライブラリがさらに読み込んだものは見えません）。ライブラリに書けるのは `use` / `from` / `ns` / `class` / `enum` / `fn` だけで、循環インポートはエラーになります。出力されるのは使われた関数だけです。シーンで同じスプライトの複数のスクリプトが同じライブラリを使っても、カスタムブロックは1つにまとめられます。詳しい規則は [scratch3_language_feature_spec.md](scratch3_language_feature_spec.md) の 4.7 節を参照してください。
 
 組み込みブロックは `Scratch.Motion`、`Scratch.Looks`、`Scratch.Sound`、`Scratch.Events`、`Scratch.Control`、`Scratch.Sensing`、`Scratch.Operators` にあります。呼び出しは対応する標準 opcode のScratchブロックとして出力し、引数の個数と真偽値入力を型検査します。メニュー入力を取る主要なターゲット選択ブロックとbroadcastも利用できます。回転APIは `rotate()` / `rotateCW()` が時計回り、`rotateCCW()` が反時計回りです。Pen と Music の拡張ブロックは `Scratch.Extension.Pen` と `Scratch.Extension.Music` にあります。拡張ブロックを使うと、コンパイラは `.sb3` の `extensions` に必要な拡張IDだけを記録します。
 

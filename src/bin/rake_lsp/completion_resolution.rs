@@ -141,6 +141,12 @@ fn resolved_namespace_alias(tokens: &[SourceToken], name: &str) -> Option<String
     None
 }
 
+/// `.*` right after a `use` path.
+fn is_glob_import_at(tokens: &[SourceToken], cursor: usize) -> bool {
+    tokens.get(cursor).map(|token| token.text.as_str()) == Some(".")
+        && tokens.get(cursor + 1).map(|token| token.text.as_str()) == Some("*")
+}
+
 fn imported_builtin_members(tokens: &[SourceToken]) -> Vec<(String, String)> {
     let descriptions = builtin_block_descriptions();
     let mut imported = Vec::new();
@@ -184,6 +190,12 @@ fn imported_builtin_members(tokens: &[SourceToken]) -> Vec<(String, String)> {
             path.push('.');
             path.push_str(&segment.text);
             cursor += 2;
+        }
+        if is_glob_import_at(tokens, cursor) {
+            for block in descriptions.iter().filter(|block| block.namespace == path) {
+                imported.push((block.member.to_string(), block.name.to_string()));
+            }
+            continue;
         }
         let mut alias = None;
         if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as") {
@@ -297,6 +309,11 @@ fn source_imported_names(tokens: &[SourceToken]) -> Vec<(String, String)> {
             path.push('.');
             path.push_str(&segment.text);
             cursor += 2;
+        }
+        if is_glob_import_at(tokens, cursor) {
+            // `use Path.*`: an empty local name stands for "every member of `path`".
+            imported.push((String::new(), path));
+            continue;
         }
         let mut alias = None;
         if tokens.get(cursor).map(|token| token.text.as_str()) == Some("as") {

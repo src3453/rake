@@ -716,10 +716,30 @@ fn imported_type_path(tokens: &[SourceToken], path: &str) -> Option<String> {
 }
 
 pub fn analyze_symbols(source: &str) -> Result<Vec<SymbolOccurrence>, String> {
-    let mut statements = Parser::new(lex(source)?).parse()?;
+    analyze_symbols_in_project(source, None)
+}
+
+/// Analyze `source` for editor features. With a `context`, the libraries named by its
+/// `from` imports are loaded and checked too, but only occurrences inside `source`
+/// itself are returned.
+pub fn analyze_symbols_in_project(
+    source: &str,
+    context: Option<&ModuleContext>,
+) -> Result<Vec<SymbolOccurrence>, String> {
+    let tokens = lex(source)?;
+    let mut statements = if scan_module_imports(&tokens).is_empty() {
+        Parser::new(tokens).parse()?
+    } else {
+        // Imports that cannot be loaded stay unresolved instead of failing analysis.
+        let mut loader = ModuleLoader::new(context);
+        loader.lenient_imports = true;
+        let result = loader.load(source);
+        result.map_err(|message| loader.source_error(&message).message)?
+    };
     // Keep the bindings resolved before a type error so editor features remain
     // available while the user is correcting an otherwise syntactically valid file.
     let _ = TypeChecker::new(Runtime::Scratch).check(&mut statements);
+    statements.retain(|statement| statement_token(statement).file == 0);
     let mut occurrences = Vec::new();
     collect_statement_symbols(source, &statements, &mut occurrences);
     let class_names = occurrences

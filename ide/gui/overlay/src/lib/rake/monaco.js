@@ -12,7 +12,7 @@ const loadScript = src => new Promise((resolve, reject) => {
 });
 
 const RAKE_KEYWORDS = [
-    'var', 'const', 'fn', 'warp', 'return', 'if', 'else', 'while', 'match', 'class', 'enum', 'ns', 'use', 'as',
+    'var', 'const', 'fn', 'warp', 'return', 'if', 'else', 'while', 'match', 'class', 'enum', 'ns', 'use', 'from', 'as',
     'public', 'private', 'self', 'event', 'send', 'macro'
 ];
 const RAKE_TYPES = ['int', 'float', 'bool', 'text'];

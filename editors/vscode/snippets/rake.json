@@ -148,6 +148,16 @@
     "body": "use Scratch.Motion.{move, rotate, rotateCW, rotateCCW}",
     "description": "Import selected Scratch Motion blocks"
   },
+  "Import from a library": {
+    "prefix": "from",
+    "body": "from \"${1:lib/path}\" use ${2:Namespace}.${3:*}",
+    "description": "Import declarations from a library .rk file (path relative to the project root)"
+  },
+  "Import all Scratch events": {
+    "prefix": "useallevents",
+    "body": "use Scratch.Events.*",
+    "description": "Import every Scratch event by its short name"
+  },
   "Import Scratch Pen extension": {
     "prefix": "usepen",
     "body": "use Scratch.Extension.Pen as Pen",

@@ -127,11 +127,16 @@ enum EventKind {
 enum Stmt {
     Use {
         token: Token,
+        /// The imported namespace or symbol path. Empty for `from "..." use *`.
         namespace: String,
         alias: Option<String>,
         alias_token: Option<Token>,
         members: Vec<(Token, String)>,
         scope: String,
+        /// `use Path.*` / `from "..." use *`: import every direct member.
+        glob: bool,
+        /// The library module named by a `from "path"` clause, if any.
+        module: Option<ModuleImport>,
     },
     Namespace {
         name_token: Token,
@@ -228,6 +233,42 @@ enum Stmt {
     },
 }
 
+/// A token that locates a statement in diagnostics.
+fn statement_token(statement: &Stmt) -> Token {
+    match statement {
+        Stmt::Use { token, .. }
+        | Stmt::Call { token, .. }
+        | Stmt::Return { token, .. }
+        | Stmt::VarDecl { token, .. }
+        | Stmt::Assign { token, .. }
+        | Stmt::MemberAssign { token, .. }
+        | Stmt::While { token, .. } => token.clone(),
+        Stmt::Namespace { name_token, .. }
+        | Stmt::Enum { name_token, .. }
+        | Stmt::Class { name_token, .. }
+        | Stmt::Function { name_token, .. } => name_token.clone(),
+        Stmt::Event { type_token, .. } => type_token.clone(),
+        Stmt::Send { message_token, .. } => message_token.clone(),
+        Stmt::If { condition, .. } => condition.token.clone(),
+        Stmt::Match { scrutinee, .. } => scrutinee.token.clone(),
+    }
+}
+
+/// The module ID of a `from` import that editor analysis could not load.
+const UNRESOLVED_MODULE: u32 = u32::MAX;
+
+/// The `from "path"` clause of a `use` declaration.
+#[derive(Clone, Debug)]
+struct ModuleImport {
+    token: Token,
+    /// The path exactly as written, relative to the project root.
+    path: String,
+    /// The loaded module ID.
+    id: u32,
+}
+
+/// One parser is shared by every module of a program so class and enum IDs stay
+/// unique; `use` aliases and visibility are reset for each module.
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
@@ -238,6 +279,16 @@ struct Parser {
     enum_ids: HashMap<String, u32>,
     next_enum_id: u32,
     namespace_aliases: HashMap<String, String>,
+    /// The module that declared each class and enum (by qualified name).
+    type_files: HashMap<String, u32>,
+    /// The module being parsed and the modules it may reference (itself plus
+    /// every module it imports directly with `from`).
+    current_file: u32,
+    visible_files: std::collections::HashSet<u32>,
+    /// Module IDs for the `from` paths of the module being parsed.
+    module_ids: HashMap<String, u32>,
+    /// Editor analysis: accept `from` imports that were not loaded.
+    lenient_imports: bool,
 }
 
 /// Expand the initial C-style token macros before parsing. Macro bodies are
@@ -426,7 +477,66 @@ impl Parser {
             enum_ids: HashMap::new(),
             next_enum_id: 0,
             namespace_aliases: HashMap::new(),
+            type_files: HashMap::new(),
+            current_file: 0,
+            visible_files: std::collections::HashSet::from([0]),
+            module_ids: HashMap::new(),
+            lenient_imports: false,
         }
+    }
+
+    /// Parse one module of a multi-file program. Modules must be parsed after the
+    /// modules they import so their classes and enums are already known.
+    fn parse_module(
+        &mut self,
+        tokens: Vec<Token>,
+        file: u32,
+        module_ids: HashMap<String, u32>,
+    ) -> Result<Vec<Stmt>, String> {
+        self.tokens = tokens;
+        self.index = 0;
+        self.namespace.clear();
+        self.type_aliases.clear();
+        self.namespace_aliases.clear();
+        self.current_file = file;
+        self.visible_files = module_ids.values().copied().chain([file]).collect();
+        self.module_ids = module_ids;
+        let statements = self.parse()?;
+        if file != 0 {
+            for statement in &statements {
+                let allowed = matches!(
+                    statement,
+                    Stmt::Use { .. }
+                        | Stmt::Namespace { .. }
+                        | Stmt::Class { .. }
+                        | Stmt::Enum { .. }
+                        | Stmt::Function { .. }
+                );
+                if !allowed {
+                    let token = statement_token(statement);
+                    return Err(diagnostic(
+                        &token,
+                        "library modules may contain only use, namespace, class, enum, and function declarations",
+                    ));
+                }
+            }
+        }
+        Ok(statements)
+    }
+
+    /// A class or enum declared in a module the current module can see.
+    fn visible_type(&self, ids: &HashMap<String, u32>, name: &str) -> Option<u32> {
+        let id = ids.get(name)?;
+        let file = self.type_files.get(name).copied().unwrap_or(0);
+        self.visible_files.contains(&file).then_some(*id)
+    }
+
+    fn visible_class(&self, name: &str) -> Option<u32> {
+        self.visible_type(&self.class_ids, name)
+    }
+
+    fn visible_enum(&self, name: &str) -> Option<u32> {
+        self.visible_type(&self.enum_ids, name)
     }
     fn current(&self) -> &Token {
         &self.tokens[self.index]
@@ -475,21 +585,21 @@ impl Parser {
             } else {
                 format!("{prefix}.{path}")
             };
-            if let Some(class_id) = self.class_ids.get(&candidate) {
-                return Ok(Type::Class(*class_id));
+            if let Some(class_id) = self.visible_class(&candidate) {
+                return Ok(Type::Class(class_id));
             }
-            if let Some(enum_id) = self.enum_ids.get(&candidate) {
-                return Ok(Type::Enum(*enum_id));
+            if let Some(enum_id) = self.visible_enum(&candidate) {
+                return Ok(Type::Enum(enum_id));
             }
             if let Some((alias, suffix)) = path.split_once('.') {
                 let alias_key = format!("{prefix}::{alias}");
                 if let Some(namespace) = self.namespace_aliases.get(&alias_key) {
                     let target = format!("{namespace}.{suffix}");
-                    if let Some(class_id) = self.class_ids.get(&target) {
-                        return Ok(Type::Class(*class_id));
+                    if let Some(class_id) = self.visible_class(&target) {
+                        return Ok(Type::Class(class_id));
                     }
-                    if let Some(enum_id) = self.enum_ids.get(&target) {
-                        return Ok(Type::Enum(*enum_id));
+                    if let Some(enum_id) = self.visible_enum(&target) {
+                        return Ok(Type::Enum(enum_id));
                     }
                 }
             }
@@ -535,7 +645,7 @@ impl Parser {
             if self.at("}") {
                 return Err(diagnostic(self.current(), "unexpected '}'"));
             }
-            if self.at("use") {
+            if self.at("use") || self.at_module_import() {
                 statements.push(self.use_declaration()?);
             } else if self.at("ns") {
                 statements.push(self.namespace_declaration()?);
@@ -567,85 +677,121 @@ impl Parser {
         }
     }
 
+    /// `from "path" use ...` at the start of a statement. `from` is only a keyword
+    /// here, so it stays usable as an identifier (for example a named argument).
+    fn at_module_import(&self) -> bool {
+        self.at("from")
+            && self.current().kind == TokenKind::Identifier
+            && self
+                .tokens
+                .get(self.index + 1)
+                .is_some_and(|token| token.kind == TokenKind::String)
+    }
+
+    fn use_member_list(&mut self, members: &mut Vec<(Token, String)>) -> Result<(), String> {
+        self.expect("{")?;
+        if !self.at("}") {
+            loop {
+                let member = self.expect_identifier()?;
+                members.push((member.clone(), member.text));
+                if !self.at(",") {
+                    break;
+                }
+                self.take();
+            }
+        }
+        self.expect("}")?;
+        Ok(())
+    }
+
     fn use_declaration(&mut self) -> Result<Stmt, String> {
+        let module = if self.at_module_import() {
+            self.take();
+            let token = self.take();
+            let path = token.text.clone();
+            let id = self
+                .module_ids
+                .get(&path)
+                .copied()
+                .or(self.lenient_imports.then_some(UNRESOLVED_MODULE));
+            let Some(id) = id else {
+                return Err(diagnostic(
+                    &token,
+                    format!(
+                        "cannot load library {path:?}: `from` imports need the source file's location; compile the file from disk inside a project"
+                    ),
+                ));
+            };
+            Some(ModuleImport { token, path, id })
+        } else {
+            None
+        };
         let token = self.expect("use")?;
-        let mut path = self.expect_identifier()?.text;
         let mut members = Vec::new();
         let mut alias = None;
         let mut alias_token = None;
-        while self.at(".") {
-            self.take();
-            if self.at("{") {
-                self.take();
-                if !self.at("}") {
-                    loop {
-                        let member = self.expect_identifier()?;
-                        members.push((member.clone(), member.text));
-                        if !self.at(",") {
-                            break;
-                        }
-                        self.take();
-                    }
-                }
-                self.expect("}")?;
-                break;
+        let mut glob = false;
+        let mut path = String::new();
+        if self.at("*") {
+            let star = self.take();
+            if module.is_none() {
+                return Err(diagnostic(
+                    &star,
+                    "`use *` needs a library: write `from \"path\" use *`, or `use Namespace.*`",
+                ));
             }
-            path.push('.');
-            path.push_str(&self.expect_identifier()?.text);
-        }
-        if self.at("as") {
-            self.take();
-            let name = self.expect_identifier()?;
-            alias = Some(name.text.clone());
-            alias_token = Some(name);
-            if self.at(".")
-                && self
-                    .tokens
-                    .get(self.index + 1)
-                    .map(|token| token.text.as_str())
-                    == Some("{")
-            {
+            glob = true;
+        } else {
+            path = self.expect_identifier()?.text;
+            while self.at(".") {
                 self.take();
-                self.take();
-                if !self.at("}") {
-                    loop {
-                        let member = self.expect_identifier()?;
-                        members.push((member.clone(), member.text));
-                        if !self.at(",") {
-                            break;
-                        }
-                        self.take();
-                    }
+                if self.at("{") {
+                    self.use_member_list(&mut members)?;
+                    break;
                 }
-                self.expect("}")?;
+                if self.at("*") {
+                    self.take();
+                    glob = true;
+                    break;
+                }
+                path.push('.');
+                path.push_str(&self.expect_identifier()?.text);
             }
-        }
-        let alias_at_end = self.at("as");
-        if alias_at_end {
-            self.take();
-            let name = self.expect_identifier()?;
-            alias = Some(name.text.clone());
-            alias_token = Some(name);
+            if self.at("as") {
+                let as_token = self.take();
+                if glob {
+                    return Err(diagnostic(&as_token, "a `*` import cannot have an alias"));
+                }
+                let name = self.expect_identifier()?;
+                alias = Some(name.text.clone());
+                alias_token = Some(name);
+                if self.at(".")
+                    && self
+                        .tokens
+                        .get(self.index + 1)
+                        .map(|token| token.text.as_str())
+                        == Some("{")
+                {
+                    self.take();
+                    self.use_member_list(&mut members)?;
+                }
+            }
+            if self.at("as") {
+                self.take();
+                let name = self.expect_identifier()?;
+                alias = Some(name.text.clone());
+                alias_token = Some(name);
+            }
         }
         let scope = self.namespace_path();
-        if members.is_empty() {
-            if let Some(ty) = builtin_type_path(&path) {
-                let local = alias
-                    .clone()
-                    .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
+        if glob {
+            self.register_glob_type_aliases(&scope, &path, module.as_ref().map(|module| module.id));
+        } else if members.is_empty() {
+            let local = alias
+                .clone()
+                .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
+            if let Some(ty) = self.imported_type(&path) {
                 self.type_aliases.insert(format!("{scope}::{local}"), ty);
-            } else if let Some(class_id) = self.class_ids.get(&path) {
-                let local = alias
-                    .clone()
-                    .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
-                self.type_aliases
-                    .insert(format!("{scope}::{local}"), Type::Class(*class_id));
-            } else if let Some(enum_id) = self.enum_ids.get(&path) {
-                let local = alias
-                    .clone()
-                    .unwrap_or_else(|| path.rsplit('.').next().unwrap_or(&path).to_string());
-                self.type_aliases
-                    .insert(format!("{scope}::{local}"), Type::Enum(*enum_id));
             }
             if let Some(alias) = &alias {
                 self.namespace_aliases
@@ -654,26 +800,12 @@ impl Parser {
         } else {
             for (_, member) in &members {
                 let target = format!("{path}.{member}");
-                if let Some(ty) = builtin_type_path(&target) {
+                if let Some(ty) = self.imported_type(&target) {
                     let local = alias
                         .as_ref()
                         .map(|alias| format!("{alias}.{member}"))
                         .unwrap_or_else(|| member.clone());
                     self.type_aliases.insert(format!("{scope}::{local}"), ty);
-                } else if let Some(class_id) = self.class_ids.get(&target) {
-                    let local = alias
-                        .as_ref()
-                        .map(|alias| format!("{alias}.{member}"))
-                        .unwrap_or_else(|| member.clone());
-                    self.type_aliases
-                        .insert(format!("{scope}::{local}"), Type::Class(*class_id));
-                } else if let Some(enum_id) = self.enum_ids.get(&target) {
-                    let local = alias
-                        .as_ref()
-                        .map(|alias| format!("{alias}.{member}"))
-                        .unwrap_or_else(|| member.clone());
-                    self.type_aliases
-                        .insert(format!("{scope}::{local}"), Type::Enum(*enum_id));
                 }
             }
         }
@@ -684,7 +816,55 @@ impl Parser {
             alias_token,
             members,
             scope,
+            glob,
+            module,
         })
+    }
+
+    /// The type a `use` path names, if it is a built-in type or a visible class or enum.
+    fn imported_type(&self, path: &str) -> Option<Type> {
+        builtin_type_path(path)
+            .or_else(|| self.visible_class(path).map(Type::Class))
+            .or_else(|| self.visible_enum(path).map(Type::Enum))
+    }
+
+    /// Make every class and enum directly inside `path` usable by its leaf name.
+    /// With an empty path (`from "lib" use *`), that is the top level of `module`.
+    fn register_glob_type_aliases(&mut self, scope: &str, path: &str, module: Option<u32>) {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}.")
+        };
+        let mut additions = Vec::new();
+        for builtin in ["Scratch.Generics.Value", "Scratch.Generics.List"] {
+            if let Some(leaf) = builtin.strip_prefix(&prefix).filter(|leaf| !leaf.contains('.')) {
+                if let Some(ty) = builtin_type_path(builtin) {
+                    additions.push((leaf.to_string(), ty));
+                }
+            }
+        }
+        let mut child_namespaces = std::collections::BTreeSet::new();
+        for (name, file) in &self.type_files {
+            if path.is_empty() && Some(*file) != module {
+                continue;
+            }
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            if let Some((child, _)) = rest.split_once('.') {
+                child_namespaces.insert(child.to_string());
+            } else if let Some(ty) = self.imported_type(name) {
+                additions.push((rest.to_string(), ty));
+            }
+        }
+        for (leaf, ty) in additions {
+            self.type_aliases.insert(format!("{scope}::{leaf}"), ty);
+        }
+        for child in child_namespaces {
+            self.namespace_aliases
+                .insert(format!("{scope}::{child}"), format!("{prefix}{child}"));
+        }
     }
 
     fn namespace_declaration(&mut self) -> Result<Stmt, String> {
@@ -702,6 +882,12 @@ impl Parser {
                 return Err(diagnostic(
                     self.current(),
                     "expected '}' before end of file",
+                ));
+            }
+            if self.at_module_import() {
+                return Err(diagnostic(
+                    self.current(),
+                    "`from \"...\" use` must be declared at the top level of a file",
                 ));
             }
             if self.at("use") {
@@ -744,6 +930,7 @@ impl Parser {
         let class_id = self.next_class_id;
         self.next_class_id += 1;
         self.class_ids.insert(name.clone(), class_id);
+        self.type_files.insert(name.clone(), self.current_file);
         self.expect("{")?;
         let mut fields = Vec::new();
         let mut methods = Vec::new();
@@ -826,6 +1013,7 @@ impl Parser {
         let id = self.next_enum_id;
         self.next_enum_id += 1;
         self.enum_ids.insert(name.clone(), id);
+        self.type_files.insert(name.clone(), self.current_file);
         self.expect("{")?;
         let mut variants = Vec::new();
         if !self.at("}") {

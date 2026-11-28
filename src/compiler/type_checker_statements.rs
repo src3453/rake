@@ -90,6 +90,20 @@ impl TypeChecker {
         info: &FunctionInfo,
         name_token: &Token,
     ) -> Result<(), String> {
+        // Names in a function body resolve against its own module's imports.
+        let previous_file = std::mem::replace(&mut self.current_file, name_token.file);
+        let result = self.check_function_in_module(parameters, body, info, name_token);
+        self.current_file = previous_file;
+        result
+    }
+
+    fn check_function_in_module(
+        &mut self,
+        parameters: &mut [Parameter],
+        body: &mut [Stmt],
+        info: &FunctionInfo,
+        name_token: &Token,
+    ) -> Result<(), String> {
         self.scopes.push(HashMap::new());
         let previous_method_class = self.current_method_class;
         if let Some(object_id) = &info.receiver_object {
@@ -332,6 +346,7 @@ impl TypeChecker {
                     .get(&resolved_name)
                     .cloned()
                     .ok_or_else(|| diagnostic(token, format!("unknown function {name:?}")))?;
+                self.ensure_visible(&resolved_name, token)?;
                 if arguments.len() != signature.arguments.len() {
                     return Err(diagnostic(
                         token,

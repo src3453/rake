@@ -16,6 +16,7 @@ fn has_module_runtime_statements(statements: &[Stmt]) -> bool {
     statements.iter().any(|statement| match statement {
         Stmt::Use { .. }
         | Stmt::Namespace { .. }
+        | Stmt::Enum { .. }
         | Stmt::Class { .. }
         | Stmt::Function { .. }
         | Stmt::Event { .. } => false,
@@ -86,13 +87,43 @@ struct CompiledUnit {
     target_variables: Map<String, Value>,
     block_count: usize,
     ir: Option<String>,
+    /// Custom blocks that came from library modules.
+    library_procedures: Vec<LibraryProcedure>,
 }
 
 fn compile_unit(source: &str, emit_ir: bool, runtime: Runtime) -> Result<CompiledUnit, String> {
-    let tokens = expand_macros(lex(source)?)?;
-    let mut statements = Parser::new(tokens).parse()?;
-    let mut symbols = TypeChecker::new(runtime).check(&mut statements)?;
+    compile_unit_in(source, None, emit_ir, runtime).map_err(|error| error.message)
+}
+
+/// Compile one `.rk` source, loading its `from` libraries when `modules` locates it.
+fn compile_unit_in(
+    source: &str,
+    modules: Option<&ModuleContext>,
+    emit_ir: bool,
+    runtime: Runtime,
+) -> Result<CompiledUnit, SourceError> {
+    let mut loader = ModuleLoader::new(modules);
+    let result = loader.load(source).and_then(|statements| {
+        let module_names = loader.module_names();
+        compile_statements(statements, &module_names, emit_ir, runtime)
+    });
+    result.map_err(|message| loader.source_error(&message))
+}
+
+fn compile_statements(
+    mut statements: Vec<Stmt>,
+    module_names: &HashMap<u32, String>,
+    emit_ir: bool,
+    runtime: Runtime,
+) -> Result<CompiledUnit, String> {
+    let mut symbols = TypeChecker::new(runtime)
+        .with_modules(module_names.clone())
+        .check(&mut statements)?;
+    let unused_library_symbols = prune_unused_library_functions(&mut statements);
+    let mut library_procedure_list = Vec::new();
+    library_procedures(&statements, module_names, &mut library_procedure_list);
     lower_function_calls(&mut statements, &mut symbols)?;
+    symbols.retain(|symbol| !unused_library_symbols.contains(&symbol.id));
     let ir = emit_ir.then(|| {
         format!("Rake IR (typed syntax tree after function-call lowering)
 {statements:#?}
@@ -174,6 +205,7 @@ fn compile_unit(source: &str, emit_ir: bool, runtime: Runtime) -> Result<Compile
         target_variables,
         block_count,
         ir,
+        library_procedures: library_procedure_list,
     })
 }
 
@@ -220,12 +252,70 @@ fn project_document(targets: Vec<Value>) -> Value {
     })
 }
 
+type ProjectOutput = (Value, Vec<(String, Vec<u8>)>, usize, Option<String>);
+
+/// Compile `source` as the file at `context.entry_path`, loading the libraries its
+/// `from "..." use` declarations name relative to `context.root`.
+pub fn compile_source_in_project(
+    source: &str,
+    context: &ModuleContext,
+    runtime: Runtime,
+) -> Result<(Value, Vec<(String, Vec<u8>)>, usize), SourceError> {
+    let unit = compile_unit_in(source, Some(context), false, runtime)?;
+    let (project, assets, block_count, _) = single_target_project(unit);
+    Ok((project, assets, block_count))
+}
+
+/// Read and compile a `.rk` file. Its project root is the nearest ancestor directory
+/// with `rake-ide.json` (or the file's directory), and `from` paths resolve from there.
+pub fn compile_file_for_runtime(
+    path: &Path,
+    runtime: Runtime,
+) -> Result<(Value, Vec<(String, Vec<u8>)>, usize), SourceError> {
+    let compilation = compile_file_internal(path, false, runtime)?;
+    Ok((compilation.0, compilation.1, compilation.2))
+}
+
+/// Like [`compile_file_for_runtime`], also returning the typed IR dump.
+pub fn compile_file_with_ir_for_runtime(path: &Path, runtime: Runtime) -> Result<Compilation, SourceError> {
+    let (project, assets, block_count, ir) = compile_file_internal(path, true, runtime)?;
+    Ok(Compilation {
+        project,
+        assets,
+        block_count,
+        ir: ir.expect("IR requested"),
+    })
+}
+
+fn compile_file_internal(path: &Path, emit_ir: bool, runtime: Runtime) -> Result<ProjectOutput, SourceError> {
+    let source = fs::read_to_string(path).map_err(|error| SourceError {
+        file: Some(path.to_path_buf()),
+        message: format!("1:1: cannot read {}: {error}", path.display()),
+    })?;
+    let root = find_project_root(path);
+    let context = ModuleContext {
+        entry_path: path,
+        root: &root,
+        sources: &FileSystemSources,
+    };
+    let unit = compile_unit_in(&source, Some(&context), emit_ir, runtime).map_err(|error| SourceError {
+        file: Some(error.file.unwrap_or_else(|| path.to_path_buf())),
+        message: error.message,
+    })?;
+    Ok(single_target_project(unit))
+}
+
 fn compile_source_internal(
     source: &str,
     emit_ir: bool,
     runtime: Runtime,
-) -> Result<(Value, Vec<(String, Vec<u8>)>, usize, Option<String>), String> {
+) -> Result<ProjectOutput, String> {
     let unit = compile_unit(source, emit_ir, runtime)?;
+    Ok(single_target_project(unit))
+}
+
+/// Wrap one compiled unit in a project with the Stage and a single sprite.
+fn single_target_project(unit: CompiledUnit) -> ProjectOutput {
     let stage = stage_target(
         unit.stage_variables,
         unit.stage_lists,
@@ -245,5 +335,5 @@ fn compile_source_internal(
         (format!("{DEFAULT_BACKDROP_ID}.svg"), DEFAULT_BACKDROP_SVG.to_vec()),
         (format!("{DEFAULT_SPRITE_ID}.svg"), DEFAULT_SPRITE_SVG.to_vec()),
     ];
-    Ok((project, assets, unit.block_count, unit.ir))
+    (project, assets, unit.block_count, unit.ir)
 }

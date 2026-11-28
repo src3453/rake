@@ -1,8 +1,16 @@
+#[cfg(test)]
 fn semantic_token_data(source: &str) -> Vec<u32> {
+    semantic_token_data_with(source, analyze_symbols(source).unwrap_or_default())
+}
+
+fn semantic_token_data_for(document: &Document) -> Vec<u32> {
+    semantic_token_data_with(&document.text, analyze_document(document))
+}
+
+fn semantic_token_data_with(source: &str, occurrences: Vec<SymbolOccurrence>) -> Vec<u32> {
     let Ok(tokens) = source_tokens(source) else {
         return Vec::new();
     };
-    let occurrences = analyze_symbols(source).unwrap_or_default();
     let occurrence_by_position: HashMap<(u32, u32), &SymbolOccurrence> = occurrences
         .iter()
         .map(|entry| ((entry.line, entry.character), entry))
@@ -41,6 +49,15 @@ fn semantic_token_data(source: &str) -> Vec<u32> {
             }
             SourceTokenKind::Identifier if enum_type_at(&tokens, token_index) => {
                 Some(types["type"])
+            }
+            // `from` is a keyword only in `from "path" use ...`.
+            SourceTokenKind::Identifier
+                if token.text == "from"
+                    && tokens
+                        .get(token_index + 1)
+                        .is_some_and(|next| next.kind == SourceTokenKind::String) =>
+            {
+                Some(types["keyword"])
             }
             SourceTokenKind::Identifier
                 if matches!(

@@ -19,5 +19,6 @@ include!("rake_lsp/completion.rs");
 include!("rake_lsp/semantic_tokens.rs");
 include!("rake_lsp/navigation.rs");
 include!("rake_lsp/scene.rs");
+include!("rake_lsp/modules.rs");
 include!("rake_lsp/server.rs");
 include!("rake_lsp/tests.rs");

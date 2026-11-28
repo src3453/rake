@@ -176,7 +176,9 @@ impl TypeChecker {
 
     fn register_classes(&mut self, statements: &[Stmt]) -> Result<(), String> {
         let mut next_class_id = 0u32;
-        self.register_classes_in(statements, &mut next_class_id)
+        let result = self.register_classes_in(statements, &mut next_class_id);
+        self.current_file = 0;
+        result
     }
 
     fn register_classes_in(
@@ -198,6 +200,7 @@ impl TypeChecker {
             else {
                 continue;
             };
+            self.current_file = name_token.file;
             if self.classes.contains_key(name) || self.enums.contains_key(name) {
                 return Err(diagnostic(
                     name_token,
@@ -416,15 +419,24 @@ impl TypeChecker {
                 }
             }
         }
+        // Library functions get IDs and helper variable names derived from their
+        // qualified name, so every script that imports a library emits the same
+        // custom block and a scene can keep a single copy per target.
+        let library_function = owner_class.is_none() && name_token.file != 0;
         let arguments = parameters
             .iter()
             .enumerate()
             .map(|(argument_index, parameter)| FunctionArgument {
                 name: parameter.name.clone(),
-                id: format!("a{:08x}_{argument_index:04x}", *function_index),
+                id: if library_function {
+                    format!("l{:016x}_{argument_index:04x}", stable_name_hash(name))
+                } else {
+                    format!("a{:08x}_{argument_index:04x}", *function_index)
+                },
                 ty: parameter.ty,
             })
             .collect::<Vec<_>>();
+        let helper_prefix = if library_function { "__rake_lib_" } else { "__rake_" };
         let mut proccode = name.to_string();
         for argument in &arguments {
             proccode.push_str(match argument.ty {
@@ -441,13 +453,13 @@ impl TypeChecker {
             .join(", ");
         let return_symbol = return_type.and_then(|ty| {
             (owner_class.is_none() && !matches!(ty, Type::Class(_))).then(|| {
-                let symbol = self.generated_symbol(format!("__rake_return_{name}"), ty);
+                let symbol = self.generated_symbol(format!("{helper_prefix}return_{name}"), ty);
                 self.symbols.push(symbol.clone());
                 symbol
             })
         });
         let completed_symbol = return_type.filter(|_| owner_class.is_none()).map(|_| {
-            let symbol = self.generated_symbol(format!("__rake_completed_{name}"), Type::Bool);
+            let symbol = self.generated_symbol(format!("{helper_prefix}completed_{name}"), Type::Bool);
             self.symbols.push(symbol.clone());
             symbol
         });
@@ -588,4 +600,14 @@ impl TypeChecker {
         statements.extend(generated);
         Ok(())
     }
+}
+
+/// FNV-1a: a hash that stays the same across builds and platforms.
+fn stable_name_hash(name: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in name.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }

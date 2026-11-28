@@ -811,7 +811,9 @@ impl VariableTable {
         let name = entry[0].as_str().unwrap_or_default().to_string();
         let new_id = format!("{prefix}{id}");
         if let Some(existing) = self.by_name.get(&name) {
-            if !name.starts_with("__rake_") {
+            // Library helper variables belong to a custom block that is kept once
+            // per target, so every script shares them like user variables.
+            if !name.starts_with("__rake_") || name.starts_with("__rake_lib_") {
                 ids.insert(id.to_string(), existing.clone());
                 return;
             }
@@ -839,6 +841,63 @@ struct TargetBuild {
     variables: VariableTable,
     blocks: Map<String, Value>,
     procedures: HashMap<String, PathBuf>,
+    /// Library custom blocks already emitted on this target: proccode -> module.
+    library_procedures: HashMap<String, String>,
+}
+
+/// Top-level `procedures_definition` blocks of `unit` that define library custom
+/// blocks this target already has from an earlier script.
+fn duplicate_library_definitions(unit: &CompiledUnit, emitted: &mut HashMap<String, String>) -> std::collections::HashSet<String> {
+    let mut definitions = HashMap::new();
+    for (id, block) in &unit.blocks {
+        if block["opcode"] != json!("procedures_definition") {
+            continue;
+        }
+        let Some(prototype) = block["inputs"]["custom_block"][1].as_str() else {
+            continue;
+        };
+        if let Some(proccode) = unit.blocks.get(prototype).and_then(|prototype| prototype["mutation"]["proccode"].as_str()) {
+            definitions.insert(proccode.to_string(), id.clone());
+        }
+    }
+    let mut duplicates = std::collections::HashSet::new();
+    for procedure in &unit.library_procedures {
+        match emitted.get(&procedure.proccode) {
+            Some(module) if *module == procedure.module => {
+                if let Some(definition) = definitions.get(&procedure.proccode) {
+                    duplicates.insert(definition.clone());
+                }
+            }
+            Some(_) => {}
+            None => {
+                emitted.insert(procedure.proccode.clone(), procedure.module.clone());
+            }
+        }
+    }
+    duplicates
+}
+
+/// Every block whose script starts at one of `roots`.
+fn blocks_in_scripts(blocks: &Map<String, Value>, roots: &std::collections::HashSet<String>) -> std::collections::HashSet<String> {
+    let mut members = std::collections::HashSet::new();
+    if roots.is_empty() {
+        return members;
+    }
+    for id in blocks.keys() {
+        let mut current = id.clone();
+        let mut steps = 0;
+        while let Some(parent) = blocks.get(&current).and_then(|block| block["parent"].as_str()) {
+            current = parent.to_string();
+            steps += 1;
+            if steps > blocks.len() {
+                break;
+            }
+        }
+        if roots.contains(&current) {
+            members.insert(id.clone());
+        }
+    }
+    members
 }
 
 /// Compile a `.rks` scene file and every `.rk` script it references into one Scratch project.
@@ -859,6 +918,7 @@ pub fn compile_scene_for_runtime(scene_path: &Path, runtime_override: Option<Run
         scene.runtime = runtime;
     }
     let base = scene_path.parent().unwrap_or(Path::new("")).to_path_buf();
+    let project_root = find_project_root(scene_path);
 
     let mut stage_variables = VariableTable::default();
     let mut stage_lists = VariableTable::default();
@@ -878,11 +938,18 @@ pub fn compile_scene_for_runtime(scene_path: &Path, runtime_override: Option<Run
                 file: scene_path.to_path_buf(),
                 message: script.span.diagnostic(format!("cannot read {:?}: {error}", script.path)),
             })?;
-            let unit = compile_unit(&script_source, false, scene.runtime).map_err(|message| SceneError {
-                file: script_path.clone(),
-                message,
+            let context = ModuleContext {
+                entry_path: &script_path,
+                root: &project_root,
+                sources: &FileSystemSources,
+            };
+            let unit = compile_unit_in(&script_source, Some(&context), false, scene.runtime).map_err(|error| SceneError {
+                file: error.file.unwrap_or_else(|| script_path.clone()),
+                message: error.message,
             })?;
-            block_count += unit.block_count;
+            let duplicate_definitions = duplicate_library_definitions(&unit, &mut build.library_procedures);
+            let shared_blocks = blocks_in_scripts(&unit.blocks, &duplicate_definitions);
+            block_count += unit.block_count - shared_blocks.len();
             let prefix = format!("t{target_index}s{script_index}_");
             let mut ids: HashMap<String, String> = HashMap::new();
             let mut renamed: HashMap<String, String> = HashMap::new();
@@ -909,6 +976,9 @@ pub fn compile_scene_for_runtime(scene_path: &Path, runtime_override: Option<Run
                 ids.insert(id.clone(), canonical.clone());
             }
             for (id, block) in unit.blocks {
+                if shared_blocks.contains(&id) {
+                    continue;
+                }
                 let mut block = block;
                 remap_ids(&mut block, &ids);
                 if !renamed.is_empty() {

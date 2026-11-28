@@ -6,6 +6,7 @@ mod tests {
         Document {
             text: text.to_string(),
             version: None,
+            path: None,
         }
     }
 
@@ -784,5 +785,106 @@ mod tests {
         assert_eq!(items[0]["textEdit"]["range"]["start"]["character"], json!(35));
         assert!(scene_diagnostics(&uri, text).is_empty());
         assert!(!scene_diagnostics(&uri, "scene Main { sprite P { scripts: [\"../src/none.rk\"] } }").is_empty());
+    }
+
+    fn library_project(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("rake-lsp-modules-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("lib")).unwrap();
+        std::fs::create_dir_all(directory.join("src")).unwrap();
+        std::fs::write(directory.join("rake-ide.json"), "{}").unwrap();
+        std::fs::write(
+            directory.join("lib/math.rk"),
+            "ns MathUtil { fn clamp(v: int, low: int, high: int) -> int { return v } }\n",
+        )
+        .unwrap();
+        directory
+    }
+
+    fn open_document(path: &Path, text: &str) -> Document {
+        Document {
+            text: text.to_string(),
+            version: None,
+            path: Some(path.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn from_is_a_keyword_only_before_a_library_path() {
+        let keyword = TOKEN_TYPES.iter().position(|name| *name == "keyword").unwrap() as u32;
+        assert_eq!(semantic_type_at("from \"lib/math\" use MathUtil.*", 0, 0), Some(keyword));
+        assert_ne!(semantic_type_at("fn twice(from: int) -> int { return from }", 0, 9), Some(keyword));
+    }
+
+    #[test]
+    fn glob_imported_events_complete_by_short_name() {
+        let text = "use Scratch.Events.*\nevent ";
+        let document = document(text);
+        let items = completion_items(Some(&document), &json!({"position": {"line": 1, "character": 6}}));
+        assert!(items.iter().any(|item| item["label"] == "greenFlag"), "{items:?}");
+    }
+
+    #[test]
+    fn library_paths_complete_hover_and_navigate() {
+        let directory = library_project("paths");
+        let entry = directory.join("src/main.rk");
+        let text = "from \"lib/m";
+        let items = completion_items(
+            Some(&open_document(&entry, text)),
+            &json!({"position": {"line": 0, "character": text.len()}}),
+        );
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0]["label"], "lib/math");
+        assert_eq!(items[0]["textEdit"]["range"]["start"]["character"], json!(6));
+
+        let text = "from \"lib/math\" use MathUtil.clamp\nvar x: int = clamp(1, 2, 3)\n";
+        let document = open_document(&entry, text);
+        let inside_path = Position { line: 0, character: 8 };
+        let definition = definition_result("file:///unused", &document, inside_path);
+        assert_eq!(definition["uri"], json!(path_to_uri(&directory.join("lib/math.rk"))));
+        let hover = hover_result(&document, inside_path);
+        assert!(hover["contents"]["value"].as_str().unwrap().contains("math.rk"));
+        // Symbols of the entry file still resolve, and none leak in from the library.
+        let occurrences = symbol_occurrences(&document);
+        assert!(occurrences.iter().any(|occurrence| occurrence.name == "x" && occurrence.declaration));
+        assert!(occurrences.iter().all(|occurrence| occurrence.line <= 1));
+    }
+
+    #[test]
+    fn diagnostics_follow_open_library_buffers() {
+        let directory = library_project("diagnostics");
+        let entry = directory.join("src/main.rk");
+        let library = directory.join("lib/math.rk");
+        let entry_uri = path_to_uri(&entry);
+        let library_uri = path_to_uri(&library);
+        let mut documents = HashMap::new();
+        documents.insert(
+            entry_uri.clone(),
+            open_document(&entry, "from \"lib/math\" use MathUtil.clamp\nvar x: int = clamp(1, 2, 3)\n"),
+        );
+        let diagnostics_for = |documents: &HashMap<String, Document>| {
+            let mut output = Vec::new();
+            publish_project_diagnostics(&mut output, &entry_uri, documents).unwrap();
+            read_message(&mut BufReader::new(output.as_slice())).unwrap().unwrap()["params"]["diagnostics"].clone()
+        };
+        assert_eq!(diagnostics_for(&documents), json!([]));
+
+        // An unsaved, broken library buffer is reported on the importing file's `from` line.
+        documents.insert(
+            library_uri,
+            open_document(&library, "ns MathUtil { fn clamp(v: int, low: int, high: int) -> int { return true } }\n"),
+        );
+        let diagnostics = diagnostics_for(&documents);
+        assert_eq!(diagnostics[0]["range"]["start"]["line"], json!(0));
+        let message = diagnostics[0]["message"].as_str().unwrap();
+        assert!(message.contains("error in library") && message.contains("math.rk"), "{message}");
+
+        // Importing something the library does not declare is reported in the entry file.
+        documents.insert(
+            entry_uri.clone(),
+            open_document(&entry, "from \"lib/missing\" use *\n"),
+        );
+        let diagnostics = diagnostics_for(&documents);
+        assert!(diagnostics[0]["message"].as_str().unwrap().contains("cannot load library"));
     }
 }

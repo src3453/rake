@@ -78,9 +78,10 @@ fn process_message<W: Write>(
                     let state = Document {
                         text: text.to_string(),
                         version: document.get("version").and_then(Value::as_i64),
+                        path: uri_to_path(uri),
                     };
-                    publish_diagnostics(writer, uri, &state)?;
                     documents.insert(uri.to_string(), state);
+                    publish_project_diagnostics(writer, uri, documents)?;
                 }
             }
         }
@@ -97,9 +98,10 @@ fn process_message<W: Write>(
                         let state = Document {
                             text: text.to_string(),
                             version: document.get("version").and_then(Value::as_i64),
+                            path: uri_to_path(uri),
                         };
-                        publish_diagnostics(writer, uri, &state)?;
                         documents.insert(uri.to_string(), state);
+                        publish_project_diagnostics(writer, uri, documents)?;
                     }
                 }
             }
@@ -142,7 +144,7 @@ fn process_message<W: Write>(
                         if is_scene_uri(&uri) {
                             scene_semantic_tokens(&document.text)
                         } else {
-                            semantic_token_data(&document.text)
+                            semantic_token_data_for(document)
                         }
                     })
                     .unwrap_or_default();

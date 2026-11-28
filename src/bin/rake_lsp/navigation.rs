@@ -1,5 +1,5 @@
 fn symbol_occurrences(document: &Document) -> Vec<SymbolOccurrence> {
-    analyze_symbols(&document.text).unwrap_or_default()
+    analyze_document(document)
 }
 
 fn macro_token_at(document: &Document, position: Position) -> Option<SourceToken> {
@@ -26,6 +26,9 @@ fn macro_declaration(document: &Document, name: &str) -> Option<SourceToken> {
 }
 
 fn definition_result(uri: &str, document: &Document, position: Position) -> Value {
+    if let Some(location) = library_definition(document, position) {
+        return location;
+    }
     if let Some(token) = macro_token_at(document, position) {
         if let Some(declaration) = macro_declaration(document, &token.text) {
             return json!({
@@ -84,7 +87,10 @@ fn hover_result(document: &Document, position: Position) -> Value {
             });
         }
     }
-    let analyzed_occurrences = analyze_symbols(&document.text).unwrap_or_default();
+    if let Some(hover) = library_hover(document, position) {
+        return hover;
+    }
+    let analyzed_occurrences = analyze_document(document);
     if let Some((index, token)) = tokens.iter().enumerate().find(|(_, token)| {
         token.line == position.line
             && position.character >= token.start_character
@@ -287,6 +293,7 @@ fn valid_identifier(name: &str) -> bool {
                 | "event"
                 | "ns"
                 | "use"
+                | "from"
                 | "as"
                 | "if"
                 | "else"

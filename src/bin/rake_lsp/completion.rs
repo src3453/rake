@@ -47,8 +47,11 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
         character: 0,
     });
     let source = document.map(|doc| doc.text.as_str()).unwrap_or("");
+    if let Some(items) = document.and_then(|document| library_path_completion_items(document, position)) {
+        return items;
+    }
     let tokens = source_tokens(source).unwrap_or_default();
-    let occurrences = analyze_symbols(source).unwrap_or_default();
+    let occurrences = document.map(analyze_document).unwrap_or_default();
     let prefix = prefix_at(source, position);
     let type_context = is_type_context(&tokens, position, &prefix);
     let member_receiver = member_receiver_at(&tokens, position, &prefix);
@@ -115,7 +118,9 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
                 names.push(event.member.to_string());
             }
             for (local, target) in source_imported_names(&tokens) {
-                if target == "Scratch.Events" {
+                if target == "Scratch.Events" && local.is_empty() {
+                    names.push(event.member.to_string());
+                } else if target == "Scratch.Events" {
                     names.push(format!("{local}.{}", event.member));
                 } else if target == event.name {
                     names.push(local);
@@ -371,6 +376,7 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
             ),
             ("ns", 14, "Namespace declaration"),
             ("use", 14, "Import a namespace or declaration"),
+            ("from", 14, "Import from a library file: from \"lib/path\" use ..."),
             ("event", 14, "Declare a Scratch event handler"),
             ("send", 14, "Broadcast a custom Scratch message"),
             ("Scratch", 9, "Scratch built-in namespaces"),

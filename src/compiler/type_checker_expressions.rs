@@ -347,6 +347,7 @@ impl TypeChecker {
         let Some(class) = self.classes.get(&class_name).cloned() else {
             return Ok(false);
         };
+        self.ensure_visible(&class_name, &call_token)?;
         if method_name != "new" {
             return Err(diagnostic(
                 &call_token,
@@ -457,6 +458,7 @@ impl TypeChecker {
             if let Some(enum_path) = qualified_expression_name(object) {
                 let resolved = self.resolve_name(&enum_path);
                 if let Some(enumeration) = self.enums.get(&resolved).cloned() {
+                    self.ensure_visible(&resolved, &expression.token)?;
                     let Some(variant) = enumeration.variants.get(name) else {
                         return Err(diagnostic(
                             &expression.token,
@@ -655,6 +657,7 @@ impl TypeChecker {
                 let signature = self.functions.get(&resolved_name).cloned().ok_or_else(|| {
                     diagnostic(&expression.token, format!("unknown function {name:?}"))
                 })?;
+                self.ensure_visible(&resolved_name, &expression.token)?;
                 let Some(return_type) = signature.return_type else {
                     return Err(diagnostic(
                         &expression.token,
