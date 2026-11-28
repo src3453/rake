@@ -410,6 +410,23 @@ fn completion_items(document: Option<&Document>, params: &Value) -> Vec<Value> {
         }
     }
 
+    if !type_context && member_receiver.is_none() {
+        for conversion in conversion_descriptions() {
+            if conversion.name.starts_with(&prefix) {
+                items.push(json!({
+                    "label": format!("{}()", conversion.name),
+                    "filterText": conversion.name,
+                    "kind": 3,
+                    "detail": conversion.signature,
+                    "documentation": conversion.description,
+                    "insertText": format!("{}(${{1:value}})", conversion.name),
+                    "insertTextFormat": 2,
+                    "sortText": format!("1-{}", conversion.name)
+                }));
+            }
+        }
+    }
+
     if type_context {
         for class_name in declared_class_names(&tokens) {
             if class_name.starts_with(&prefix) {

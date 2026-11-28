@@ -191,6 +191,42 @@ mod decompiler_tests {
     }
 
     #[test]
+    fn modulo_decompiles_to_the_percent_operator() {
+        let (project, assets, _) = compile_source("var a: int = 7
+var b: int = a % 3").unwrap();
+        let assets = assets.into_iter().collect::<HashMap<_, _>>();
+        let (decompilation, _) = decompile_and_recompile("modulo", &project, &assets);
+        let sprite = decompilation
+            .files
+            .iter()
+            .filter(|file| file.path.starts_with("src/"))
+            .map(|file| String::from_utf8(file.contents.clone()).unwrap())
+            .collect::<String>();
+        assert!(sprite.contains(" % 3"), "{sprite}");
+    }
+
+    #[test]
+    fn letter_of_decompiles_to_zero_based_indexing() {
+        let (project, assets, _) = compile_source(
+            "var word: text = \"Rake\"
+var i: int = 1
+var a: text = word[i]
+var b: text = word[2]",
+        )
+        .unwrap();
+        let assets = assets.into_iter().collect::<HashMap<_, _>>();
+        let (decompilation, _) = decompile_and_recompile("letter-of", &project, &assets);
+        let sources = decompilation
+            .files
+            .iter()
+            .filter(|file| file.path.starts_with("src/"))
+            .map(|file| String::from_utf8(file.contents.clone()).unwrap())
+            .collect::<String>();
+        assert!(sources.contains("word[int(i)]"), "{sources}");
+        assert!(sources.contains("word[2]"), "{sources}");
+    }
+
+    #[test]
     fn identifiers_are_sanitized_for_rake() {
         assert_eq!(rake_identifier("my score", "variable"), "my_score");
         assert_eq!(rake_identifier("1st", "variable"), "variable_1st");

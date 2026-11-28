@@ -92,6 +92,27 @@ enum ExprKind {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    /// `text[index]`: the character at a 0-based index.
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    /// A type conversion call such as `int(x)` or `text(x)`, resolved by the type checker.
+    Convert {
+        target: Type,
+        operand: Box<Expr>,
+    },
+}
+
+/// The scalar type a conversion function name such as `int` or `text` converts to.
+fn conversion_target(name: &str) -> Option<Type> {
+    match name {
+        "int" => Some(Type::Int),
+        "float" => Some(Type::Float),
+        "bool" => Some(Type::Bool),
+        "text" => Some(Type::Text),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1183,15 +1204,16 @@ impl Parser {
         if self.current().kind == TokenKind::Identifier
             && self.tokens[self.index + 1].text == "."
             && self.tokens[self.index + 2].kind == TokenKind::Identifier
-            && matches!(self.tokens[self.index + 3].text.as_str(), "=" | "+=" | "-=")
+            && is_assignment_operator(&self.tokens[self.index + 3].text)
         {
             let token = self.take();
             let object = token.text.clone();
             self.take();
             let field_token = self.take();
             let field = field_token.text.clone();
-            let operator = self.take().text;
-            let value = self.expression(1)?;
+            let operator_token = self.take();
+            let operator = operator_token.text.clone();
+            let value = self.assignment_value(&operator_token)?;
             return Ok(Stmt::MemberAssign {
                 token,
                 field_token,
@@ -1203,12 +1225,13 @@ impl Parser {
             });
         }
         if self.current().kind == TokenKind::Identifier
-            && matches!(self.tokens[self.index + 1].text.as_str(), "=" | "+=" | "-=")
+            && is_assignment_operator(&self.tokens[self.index + 1].text)
         {
             let token = self.take();
             let name = token.text.clone();
-            let operator = self.take().text;
-            let value = self.expression(1)?;
+            let operator_token = self.take();
+            let operator = operator_token.text.clone();
+            let value = self.assignment_value(&operator_token)?;
             return Ok(Stmt::Assign {
                 token,
                 name,
@@ -1240,10 +1263,29 @@ impl Parser {
         if self.current().kind == TokenKind::Identifier && self.tokens[self.index + 1].text == "(" {
             return self.call_statement();
         }
+        if self.current().kind == TokenKind::Identifier && self.tokens[self.index + 1].text == "[" {
+            return Err(diagnostic(
+                &self.tokens[self.index + 1],
+                "text characters cannot be assigned; build a new text value instead",
+            ));
+        }
         Err(diagnostic(
             self.current(),
             "expected a variable declaration, assignment, function call, send, if, while, or match",
         ))
+    }
+
+    /// The right-hand side of an assignment. `x++` / `x--` have none, so they
+    /// assign `x + 1` / `x - 1` through an implicit literal `1`.
+    fn assignment_value(&mut self, operator: &Token) -> Result<Expr, String> {
+        if operator.text == "++" || operator.text == "--" {
+            return Ok(Expr {
+                kind: ExprKind::Number("1".to_string()),
+                token: operator.clone(),
+                ty: Some(Type::Int),
+            });
+        }
+        self.expression(1)
     }
 
     fn call_statement(&mut self) -> Result<Stmt, String> {
@@ -1389,14 +1431,17 @@ impl Parser {
             "==" | "!=" => Some(3),
             "<" | "<=" | ">" | ">=" => Some(4),
             "+" | "-" => Some(5),
-            "*" | "/" => Some(6),
+            "*" | "/" | "%" => Some(6),
             _ => None,
         }
     }
 
     fn expression(&mut self, minimum: u8) -> Result<Expr, String> {
         let mut left = self.prefix()?;
-        while let Some(precedence) = Self::precedence(&self.current().text) {
+        while let Some(precedence) = (self.current().kind == TokenKind::Symbol)
+            .then(|| Self::precedence(&self.current().text))
+            .flatten()
+        {
             if precedence < minimum {
                 break;
             }
@@ -1428,7 +1473,7 @@ impl Parser {
                 ty: None,
             });
         }
-        if token.text == "!" || token.text == "-" {
+        if token.kind == TokenKind::Symbol && (token.text == "!" || token.text == "-") {
             self.take();
             let operand = self.expression(7)?;
             return Ok(Expr {
@@ -1440,7 +1485,7 @@ impl Parser {
                 ty: None,
             });
         }
-        if token.text == "(" {
+        if token.kind == TokenKind::Symbol && token.text == "(" {
             self.take();
             let expr = self.expression(1)?;
             self.expect(")")?;
@@ -1461,7 +1506,7 @@ impl Parser {
             }
             TokenKind::String => {
                 self.take();
-                Ok(Expr {
+                self.postfix(Expr {
                     kind: ExprKind::Text(token.text.clone()),
                     token,
                     ty: Some(Type::Text),
@@ -1517,7 +1562,21 @@ impl Parser {
     }
 
     fn postfix(&mut self, mut expression: Expr) -> Result<Expr, String> {
-        while self.at(".") {
+        while self.current().kind == TokenKind::Symbol && (self.at(".") || self.at("[")) {
+            if self.at("[") {
+                let token = self.take();
+                let index = self.expression(1)?;
+                self.expect("]")?;
+                expression = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                    token,
+                    ty: None,
+                };
+                continue;
+            }
             self.take();
             let member = self.expect_identifier()?;
             if self.at("(") {
@@ -1567,6 +1626,26 @@ impl Parser {
         }
         self.expect(")")?;
         Ok(arguments)
+    }
+}
+
+/// Statement operators that assign to a variable or field.
+fn is_assignment_operator(operator: &str) -> bool {
+    matches!(
+        operator,
+        "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "++" | "--"
+    )
+}
+
+/// The binary operator a compound assignment applies, e.g. `+` for `+=` and `++`.
+fn compound_assignment_operator(operator: &str) -> Option<&'static str> {
+    match operator {
+        "+=" | "++" => Some("+"),
+        "-=" | "--" => Some("-"),
+        "*=" => Some("*"),
+        "/=" => Some("/"),
+        "%=" => Some("%"),
+        _ => None,
     }
 }
 

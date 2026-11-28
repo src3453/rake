@@ -102,6 +102,44 @@ while score < limit {
 
 `int`、`float`、`bool`、`text`、`Scratch.Generics.Value`、変数、型注釈と型推論、算術・比較・論理演算、`if`、`while`、`match`を実装しています。`;` は任意です。`while` はScratchの「〜まで繰り返す」ブロックと条件反転へ変換します。
 
+## 演算子と型変換
+
+算術演算子は `+`、`-`、`*`、`/`、`%` です。`/` の結果は常に `float`、それ以外は両辺が `int` なら `int` になります。`%` はScratchの「〜を〜で割った余り」ブロックで、結果は割る数と同じ符号です（`-7 % 3` は `2`）。`text` 同士の `+` は「〜と〜」ブロックで連結します。`text` と数値を `+` でつなぐことはできないので、`text(...)` で変換してください。
+
+`text[i]` で0始まりの位置 `i` の文字を `text` として取り出します（`"Rake"[0]` は `"R"`）。Scratchの「〜の〜番目の文字」ブロック `letterOf(i + 1, text)` に変換し、添字がリテラルならコンパイル時に `+ 1` します。添字は `int`、対象は `text` か `Scratch.Generics.Value` です。範囲外は空文字列になり、`text[i] = ...` のような代入はできません。
+
+代入には `=` のほか複合代入 `+=`、`-=`、`*=`、`/=`、`%=` と、1増減する `x++` / `x--`（文として使用、`obj.field++` も可）を使えます。複合代入の結果は通常の演算子と同じ型規則で検査するため、`int` 変数に `/=` は使えません。
+
+組み込みの変換関数 `int(x)`、`float(x)`、`text(x)`、`bool(x)` で型を変換します。
+
+| 変換 | 受け付ける型 | Scratchでの動作 |
+| --- | --- | --- |
+| `int(x)` | `float`、`text`、`bool`、enum、`Scratch.Generics.Value` | 「切り下げ」ブロック（負の無限大方向へ丸める）。数値でない文字列は `0`、`true` は `1` |
+| `float(x)` | `int`、`text`、`bool`、enum、`Scratch.Generics.Value` | `x + 0`。数値でない文字列は `0` |
+| `text(x)` | `int`、`float`、`bool`、enum、`Scratch.Generics.Value` | `x` と空文字列の連結。`true` は `"true"` |
+| `bool(x)` | `int`、`float` | `not (x = 0)` |
+
+すでに目的の型である値（`int` → `float` など）にはブロックを追加しません。
+
+```rake
+fn toHex(input: int) -> text {
+    const digits: text = "0123456789ABCDEF"
+    var value: int = input
+    var result: text = ""
+    while value > 0 {
+        result = digits[value % 16] + result
+        value = int(value / 16)
+    }
+    return result
+}
+
+var count: int = 0
+count++
+Scratch.Looks.say("count = " + text(count))
+```
+
+全体の例は [examples/operators.rk](examples/operators.rk) を参照してください。
+
 ## enum
 
 ペイロードを持たない `enum` を宣言できます。variant は宣言順に `0` からタグが割り当てられ、enum 名と variant 名はコンパイル時に解決されます。Scratch ではタグ数値として保存され、実行時の enum オブジェクトやディスパッチ表は作りません。代入、関数の引数と戻り値、`==` / `!=` に対応し、異なる enum 型同士や数値演算には使えません。

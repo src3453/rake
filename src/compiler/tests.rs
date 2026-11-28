@@ -814,4 +814,174 @@ var result: int = counter.getValue()
         );
         fs::remove_file(path).unwrap();
     }
+
+    fn opcodes(project: &Value) -> Vec<String> {
+        project["targets"][1]["blocks"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|block| block["opcode"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn modulo_compound_assignments_and_increments_compile() {
+        let source = "var n: int = 10\nvar f: float = 1.5\nvar r: int = n % 3\nn *= 2\nn %= 4\nn++\nn--\nf /= 2\nf -= 0.5";
+        let (project, _) = source_project(source);
+        let opcodes = opcodes(&project);
+        for opcode in [
+            "operator_mod",
+            "operator_multiply",
+            "operator_add",
+            "operator_subtract",
+            "operator_divide",
+        ] {
+            assert!(opcodes.iter().any(|op| op == opcode), "missing opcode {opcode}");
+        }
+
+        let class_source = "class Counter { var count: int = 0 fn new() { return self } fn tick() { self.count++ } }\nvar counter: Counter = Counter.new()\ncounter.count *= 3\ncounter.count--";
+        compile_source(class_source).expect("field compound assignments compile");
+    }
+
+    #[test]
+    fn compound_assignments_keep_static_types() {
+        let error = compile_source("var n: int = 10\nn /= 2").unwrap_err();
+        assert!(error.contains("cannot assign float to int variable"), "{error}");
+        let error = compile_source("var n: int = 1\nn %= 1.5").unwrap_err();
+        assert!(error.contains("cannot assign float to int variable"), "{error}");
+        let error = compile_source("var ok: bool = true\nok++").unwrap_err();
+        assert!(error.contains("requires numeric operands"), "{error}");
+        let error = compile_source("const n: int = 1\nn++").unwrap_err();
+        assert!(error.contains("cannot assign to const"), "{error}");
+        let error = compile_source("var s: text = \"a\"\ns -= \"b\"").unwrap_err();
+        assert!(error.contains("requires numeric operands"), "{error}");
+    }
+
+    #[test]
+    fn text_plus_joins_and_requires_text_operands() {
+        let (project, _) = source_project(
+            "var name: text = \"Rake\"\nvar message: text = \"Hi \" + name\nmessage += \"!\"",
+        );
+        let opcodes = opcodes(&project);
+        assert_eq!(opcodes.iter().filter(|op| *op == "operator_join").count(), 2);
+        assert!(!opcodes.iter().any(|op| op == "operator_add"));
+
+        let error = compile_source("var message: text = \"Score: \" + 3").unwrap_err();
+        assert!(error.contains("text(...)"), "{error}");
+        compile_source("var score: int = 3\nvar message: text = \"Score: \" + text(score)")
+            .expect("explicit text conversion joins");
+    }
+
+    #[test]
+    fn conversion_functions_type_check_and_emit_scratch_blocks() {
+        let source = r#"
+var f: float = 3.7
+var t: text = "42"
+var flag: bool = true
+var a: int = int(f)
+var b: int = int(t)
+var c: float = float(t)
+var d: text = text(a)
+var e: bool = bool(a)
+var g: int = int(flag)
+var h: float = float(a)
+"#;
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let floors = blocks
+            .values()
+            .filter(|block| {
+                block["opcode"] == "operator_mathop" && block["fields"]["OPERATOR"][0] == "floor"
+            })
+            .count();
+        assert_eq!(floors, 3, "int(float), int(text), int(bool) use floor");
+        let opcodes = opcodes(&project);
+        for opcode in ["operator_add", "operator_join", "operator_not", "operator_equals"] {
+            assert!(opcodes.iter().any(|op| op == opcode), "missing opcode {opcode}");
+        }
+
+        for (bad, message) in [
+            ("var x: bool = bool(\"yes\")", "cannot convert text to bool"),
+            ("var x: int = int(1, 2)", "takes exactly 1 argument"),
+            (
+                "use Scratch.Generics.List as SList\nvar items: SList = SList.new()\nvar n: int = int(items)",
+                "cannot convert",
+            ),
+        ] {
+            let error = compile_source(bad).unwrap_err();
+            assert!(error.contains(message), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn compiles_the_hex_conversion_program_with_operators() {
+        let source = r#"
+fn convertToHex(_value: int) -> text {
+    var value: int = _value
+    const hex_chars: text = "0123456789ABCDEF"
+    var result = ""
+    var is_negative = false
+    if value == 0 { return "0" }
+    if value < 0 {
+        is_negative = true
+        value = -value
+    }
+    while value > 0 {
+        var remainder = value % 16
+        result = hex_chars[remainder] + result
+        value = int(value / 16)
+    }
+    if is_negative { return "-" + result }
+    return result
+}
+
+event Scratch.Events.greenFlag {
+    while true {
+        Scratch.Sensing.askAndWait("Enter decimal value:")
+        var value = int(Scratch.Sensing.answer())
+        Scratch.Looks.sayForSeconds(convertToHex(value), 5)
+    }
+}
+"#;
+        let (project, _) = source_project(source);
+        let opcodes = opcodes(&project);
+        for opcode in ["operator_mod", "operator_join", "operator_mathop", "operator_letter_of"] {
+            assert!(opcodes.iter().any(|op| op == opcode), "missing opcode {opcode}");
+        }
+    }
+
+    #[test]
+    fn text_indexing_is_zero_based_letter_of() {
+        let source = "var word: text = \"Rake\"\nvar i: int = 2\nvar first: text = word[0]\nvar third: text = word[i]\nvar lit: text = \"abc\"[1]";
+        let (project, _) = source_project(source);
+        let blocks = project["targets"][1]["blocks"].as_object().unwrap();
+        let letters = blocks
+            .values()
+            .filter(|block| block["opcode"] == "operator_letter_of")
+            .collect::<Vec<_>>();
+        assert_eq!(letters.len(), 3);
+        // Literal indexes are shifted at compile time; others add 1 in Scratch.
+        let literal_letters = letters
+            .iter()
+            .filter_map(|block| block["inputs"]["LETTER"][1][1].as_str())
+            .collect::<Vec<_>>();
+        assert!(literal_letters.contains(&"1") && literal_letters.contains(&"2"), "{literal_letters:?}");
+        let dynamic = letters
+            .iter()
+            .find(|block| block["inputs"]["LETTER"][0] == 3)
+            .expect("variable index uses a reporter");
+        let add = &blocks[dynamic["inputs"]["LETTER"][1].as_str().unwrap()];
+        assert_eq!(add["opcode"], "operator_add");
+        assert_eq!(add["inputs"]["NUM2"], json!([1, [4, "1"]]));
+
+        for (bad, message) in [
+            ("var n: int = 5\nvar x: text = n[0]", "cannot index int"),
+            ("var s: text = \"ab\"\nvar x: text = s[0.5]", "text index must be int"),
+            ("var s: text = \"ab\"\nvar x: text = s[\"0\"]", "text index must be int"),
+            ("var s: text = \"ab\"\ns[0] = \"c\"", "cannot be assigned"),
+        ] {
+            let error = compile_source(bad).unwrap_err();
+            assert!(error.contains(message), "{bad}: {error}");
+        }
+    }
 }

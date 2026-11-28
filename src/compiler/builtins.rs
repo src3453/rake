@@ -199,3 +199,36 @@ fn builtin_block(name: &str) -> Option<BuiltinBlock> {
         .into_iter()
         .find(|block| block.name == name)
 }
+
+/// A built-in type conversion function such as `int(value)`.
+#[derive(Clone, Debug)]
+pub struct ConversionDescription {
+    pub name: &'static str,
+    pub signature: &'static str,
+    pub description: &'static str,
+}
+
+pub fn conversion_descriptions() -> &'static [ConversionDescription] {
+    &[
+        ConversionDescription {
+            name: "int",
+            signature: "int(value: float | text | bool | Scratch.Generics.Value) -> int",
+            description: "Convert a value to int, rounding down like Scratch's floor block. Non-numeric text becomes 0; true becomes 1.",
+        },
+        ConversionDescription {
+            name: "float",
+            signature: "float(value: int | text | bool | Scratch.Generics.Value) -> float",
+            description: "Convert a value to float. Non-numeric text becomes 0; true becomes 1.",
+        },
+        ConversionDescription {
+            name: "text",
+            signature: "text(value: int | float | bool | Scratch.Generics.Value) -> text",
+            description: "Convert a value to text, as Scratch's join block does. true becomes \"true\".",
+        },
+        ConversionDescription {
+            name: "bool",
+            signature: "bool(value: int | float) -> bool",
+            description: "Convert a number to bool: 0 is false, every other number is true.",
+        },
+    ]
+}

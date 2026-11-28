@@ -31,9 +31,15 @@ fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
                 collect_expression_calls(argument, calls);
             }
         }
-        ExprKind::Unary { operand, .. } => collect_expression_calls(operand, calls),
+        ExprKind::Unary { operand, .. } | ExprKind::Convert { operand, .. } => {
+            collect_expression_calls(operand, calls)
+        }
         ExprKind::Member { object, .. } => collect_expression_calls(object, calls),
-        ExprKind::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            object: left,
+            index: right,
+        } => {
             collect_expression_calls(left, calls);
             collect_expression_calls(right, calls);
         }

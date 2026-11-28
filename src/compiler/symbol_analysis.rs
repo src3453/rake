@@ -334,7 +334,9 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
                 ));
             }
         }
-        ExprKind::Unary { operand, .. } => collect_expression_symbols(source, operand, output),
+        ExprKind::Unary { operand, .. } | ExprKind::Convert { operand, .. } => {
+            collect_expression_symbols(source, operand, output)
+        }
         ExprKind::ObjectInit {
             class_id,
             class_name,
@@ -404,7 +406,11 @@ fn collect_expression_symbols(source: &str, expression: &Expr, output: &mut Vec<
                 collect_expression_symbols(source, argument, output);
             }
         }
-        ExprKind::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            object: left,
+            index: right,
+        } => {
             collect_expression_symbols(source, left, output);
             collect_expression_symbols(source, right, output);
         }

@@ -132,10 +132,14 @@ fn lower_expression(
     allocator: &mut GeneratedSymbolAllocator,
 ) -> Result<(), String> {
     match &mut expression.kind {
-        ExprKind::Unary { operand, .. } => {
+        ExprKind::Unary { operand, .. } | ExprKind::Convert { operand, .. } => {
             lower_expression(operand, before, symbols, allocator)?;
         }
-        ExprKind::Binary { left, right, .. } => {
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            object: left,
+            index: right,
+        } => {
             lower_expression(left, before, symbols, allocator)?;
             lower_expression(right, before, symbols, allocator)?;
         }

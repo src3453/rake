@@ -23,9 +23,9 @@ const registerLanguages = monaco => {
 
     monaco.languages.setLanguageConfiguration('rake', {
         comments: {lineComment: '//'},
-        brackets: [['{', '}'], ['(', ')']],
-        autoClosingPairs: [{open: '{', close: '}'}, {open: '(', close: ')'}, {open: '"', close: '"', notIn: ['string']}],
-        surroundingPairs: [{open: '{', close: '}'}, {open: '(', close: ')'}, {open: '"', close: '"'}],
+        brackets: [['{', '}'], ['(', ')'], ['[', ']']],
+        autoClosingPairs: [{open: '{', close: '}'}, {open: '(', close: ')'}, {open: '[', close: ']'}, {open: '"', close: '"', notIn: ['string']}],
+        surroundingPairs: [{open: '{', close: '}'}, {open: '(', close: ')'}, {open: '[', close: ']'}, {open: '"', close: '"'}],
         indentationRules: {increaseIndentPattern: /\{[^}"']*$/, decreaseIndentPattern: /^\s*\}/}
     });
     monaco.languages.setLanguageConfiguration('rake-scene', {
@@ -54,8 +54,8 @@ const registerLanguages = monaco => {
                 }}],
                 [/"/, 'string', '@string'],
                 [/\d+(\.\d+)?/, 'number'],
-                [/==|!=|<=|>=|&&|\|\||\+=|-=|->|=>|[+\-*/<>=!]/, 'operator'],
-                [/[{}()]/, '@brackets']
+                [/==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|=>|[+\-*/%<>=!]/, 'operator'],
+                [/[{}()[\]]/, '@brackets']
             ],
             string: [
                 [/[^\\"]+/, 'string'],

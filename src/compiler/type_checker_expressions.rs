@@ -384,6 +384,73 @@ impl TypeChecker {
         Ok(true)
     }
 
+    /// The result type of a binary operator, or the message explaining why the
+    /// operand types are not accepted.
+    fn binary_result_type(operator: &str, left: Type, right: Type) -> Result<Type, String> {
+        match operator {
+            "+" if left == Type::Text && right == Type::Text => Ok(Type::Text),
+            "+" if left == Type::Text || right == Type::Text => Err(
+                "\"+\" joins text only with text; convert the other operand with text(...)"
+                    .to_string(),
+            ),
+            "+" | "-" | "*" | "/" | "%" if left.numeric() && right.numeric() => {
+                if operator == "/" || left == Type::Float || right == Type::Float {
+                    Ok(Type::Float)
+                } else {
+                    Ok(Type::Int)
+                }
+            }
+            "+" | "-" | "*" | "/" | "%" => Err(format!("{operator:?} requires numeric operands")),
+            "<" | "<=" | ">" | ">=" if left.numeric() && right.numeric() => Ok(Type::Bool),
+            "<" | "<=" | ">" | ">=" => Err(format!("{operator:?} requires numeric operands")),
+            "==" | "!=" if matches!(left, Type::Class(_)) => {
+                Err("class instance identity comparisons are not implemented yet".to_string())
+            }
+            "==" | "!="
+                if left == right
+                    || left == Type::ScratchValue
+                    || right == Type::ScratchValue
+                    || (left.numeric() && right.numeric()) =>
+            {
+                Ok(Type::Bool)
+            }
+            "==" | "!=" => Err("equality operands must have compatible types".to_string()),
+            "&&" | "||" if left == Type::Bool && right == Type::Bool => Ok(Type::Bool),
+            "&&" | "||" => Err(format!("{operator:?} requires bool operands")),
+            _ => Err(format!("unsupported operator {operator:?}")),
+        }
+    }
+
+    /// Check that `int(...)`, `float(...)`, `text(...)`, or `bool(...)` accepts a value.
+    fn check_conversion(&self, target: Type, source: Type, token: &Token) -> Result<(), String> {
+        let scalar = matches!(
+            source,
+            Type::Int | Type::Float | Type::Bool | Type::Text | Type::ScratchValue
+        );
+        let valid = match target {
+            Type::Int | Type::Float => scalar || matches!(source, Type::Enum(_)),
+            Type::Text => scalar || matches!(source, Type::Enum(_)),
+            Type::Bool => matches!(source, Type::Bool | Type::Int | Type::Float),
+            _ => false,
+        };
+        if valid {
+            return Ok(());
+        }
+        let hint = if target == Type::Bool && matches!(source, Type::Text | Type::ScratchValue) {
+            "; compare the value instead, e.g. value == \"true\""
+        } else {
+            ""
+        };
+        Err(diagnostic(
+            token,
+            format!(
+                "cannot convert {} to {}{hint}",
+                self.readable_type_name(source),
+                target.name()
+            ),
+        ))
+    }
+
     fn assignable(expected: Type, actual: Type) -> bool {
         expected == Type::Any
             || expected == actual
@@ -474,6 +541,30 @@ impl TypeChecker {
                     expression.ty = Some(Type::Enum(enumeration.id));
                     return Ok(Type::Enum(enumeration.id));
                 }
+            }
+        }
+        if let ExprKind::Call {
+            name,
+            receiver: None,
+            arguments,
+            ..
+        } = &mut expression.kind
+        {
+            if let Some(target) = conversion_target(name) {
+                if arguments.len() != 1 {
+                    return Err(diagnostic(
+                        &expression.token,
+                        format!(
+                            "{name}() takes exactly 1 argument, got {}",
+                            arguments.len()
+                        ),
+                    ));
+                }
+                let operand = arguments.remove(0);
+                expression.kind = ExprKind::Convert {
+                    target,
+                    operand: Box::new(operand),
+                };
             }
         }
         if self.check_class_constructor_call(expression)? {
@@ -709,69 +800,37 @@ impl TypeChecker {
             } => {
                 let left_type = self.check_expr(left)?;
                 let right_type = self.check_expr(right)?;
-                match operator.as_str() {
-                    "+" | "-" | "*" | "/" if left_type.numeric() && right_type.numeric() => {
-                        if operator == "/" || left_type == Type::Float || right_type == Type::Float
-                        {
-                            Type::Float
-                        } else {
-                            Type::Int
-                        }
-                    }
-                    "+" | "-" | "*" | "/" => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            format!("{operator:?} requires numeric operands"),
-                        ));
-                    }
-                    "<" | "<=" | ">" | ">=" if left_type.numeric() && right_type.numeric() => {
-                        Type::Bool
-                    }
-                    "<" | "<=" | ">" | ">=" => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            format!("{operator:?} requires numeric operands"),
-                        ));
-                    }
-                    "==" | "!=" if matches!(left_type, Type::Class(_)) => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            "class instance identity comparisons are not implemented yet",
-                        ));
-                    }
-                    "==" | "!="
-                        if left_type == right_type
-                            || left_type == Type::ScratchValue
-                            || right_type == Type::ScratchValue
-                            || matches!(
-                                (left_type, right_type),
-                                (Type::Int, Type::Float) | (Type::Float, Type::Int)
-                            ) =>
-                    {
-                        Type::Bool
-                    }
-                    "==" | "!=" => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            "equality operands must have compatible types",
-                        ));
-                    }
-                    "&&" | "||" if left_type == Type::Bool && right_type == Type::Bool => {
-                        Type::Bool
-                    }
-                    "&&" | "||" => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            format!("{operator:?} requires bool operands"),
-                        ));
-                    }
-                    _ => {
-                        return Err(diagnostic(
-                            &expression.token,
-                            format!("unsupported operator {operator:?}"),
-                        ));
-                    }
+                Self::binary_result_type(operator, left_type, right_type)
+                    .map_err(|message| diagnostic(&expression.token, message))?
+            }
+            ExprKind::Index { object, index } => {
+                let object_type = self.check_expr(object)?;
+                if !matches!(object_type, Type::Text | Type::ScratchValue) {
+                    return Err(diagnostic(
+                        &expression.token,
+                        format!(
+                            "cannot index {}; only text and Scratch.Generics.Value support [index]",
+                            self.readable_type_name(object_type)
+                        ),
+                    ));
                 }
+                let index_type = self.check_expr(index)?;
+                if index_type != Type::Int {
+                    return Err(diagnostic(
+                        &index.token,
+                        format!(
+                            "text index must be int, got {}",
+                            self.readable_type_name(index_type)
+                        ),
+                    ));
+                }
+                Type::Text
+            }
+            ExprKind::Convert { target, operand } => {
+                let target = *target;
+                let source = self.check_expr(operand)?;
+                self.check_conversion(target, source, &operand.token)?;
+                target
             }
             ExprKind::Match { scrutinee, arms } => {
                 return self.check_match(scrutinee, arms, true).map(|ty| {

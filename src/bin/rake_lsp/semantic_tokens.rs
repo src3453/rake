@@ -26,6 +26,14 @@ fn semantic_token_data_with(source: &str, occurrences: Vec<SymbolOccurrence>) ->
 
     for (token_index, token) in tokens.iter().enumerate() {
         let token_type = match token.kind {
+            // `int(x)` and friends are conversion function calls, not type annotations.
+            SourceTokenKind::Identifier
+                if matches!(token.text.as_str(), "int" | "float" | "bool" | "text")
+                    && tokens.get(token_index + 1).is_some_and(|next| next.text == "(")
+                    && !(token_index > 0 && tokens[token_index - 1].text == ".") =>
+            {
+                Some(types["function"])
+            }
             SourceTokenKind::Identifier
                 if matches!(token.text.as_str(), "int" | "float" | "bool" | "text") =>
             {
@@ -164,6 +172,12 @@ fn semantic_token_data_with(source: &str, occurrences: Vec<SymbolOccurrence>) ->
                     "=" | "->" | "=>"
                         | "+="
                         | "-="
+                        | "*="
+                        | "/="
+                        | "%="
+                        | "++"
+                        | "--"
+                        | "%"
                         | "+"
                         | "-"
                         | "*"

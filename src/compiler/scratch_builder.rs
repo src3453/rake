@@ -546,7 +546,7 @@ impl ScratchBuilder {
                     false,
                     json!({"VARIABLE": [symbol.scratch_name, symbol.id]}),
                 );
-                let assigned = if operator == "+=" || operator == "-=" {
+                let assigned = if let Some(binary) = compound_assignment_operator(operator) {
                     let left = Expr {
                         kind: ExprKind::Name {
                             value: symbol.source_name.clone(),
@@ -557,7 +557,7 @@ impl ScratchBuilder {
                     };
                     Expr {
                         kind: ExprKind::Binary {
-                            operator: if operator == "+=" { "+" } else { "-" }.to_string(),
+                            operator: binary.to_string(),
                             left: Box::new(left),
                             right: Box::new(value.clone()),
                         },
@@ -641,6 +641,11 @@ impl ScratchBuilder {
         }
         if let ExprKind::Text(value) = &expr.kind {
             return Ok(json!([1, [10, value]]));
+        }
+        if let ExprKind::Convert { target, operand } = &expr.kind {
+            if conversion_is_identity(*target, operand.ty) {
+                return self.value_input(operand, parent);
+            }
         }
         let reporter = self.reporter(expr, parent)?;
         let shadow = match expr.ty {
@@ -766,12 +771,56 @@ impl ScratchBuilder {
                 operator,
                 left,
                 right,
+            } if operator == "+" && left.ty == Some(Type::Text) => {
+                let id = self.block("operator_join", Some(parent), false, json!({}));
+                let left_input = self.value_input(left, &id)?;
+                let right_input = self.value_input(right, &id)?;
+                self.input(&id, "STRING1", left_input);
+                self.input(&id, "STRING2", right_input);
+                Ok(id)
+            }
+            ExprKind::Convert { target, operand } => self.conversion_reporter(*target, operand, parent),
+            ExprKind::Index { object, index } => {
+                // Rake indexes text from 0; Scratch's letter block counts from 1.
+                let id = self.block("operator_letter_of", Some(parent), false, json!({}));
+                let letter = match &index.kind {
+                    ExprKind::Number(value) if value.parse::<i64>().is_ok() => {
+                        json!([1, [7, (value.parse::<i64>().unwrap() + 1).to_string()]])
+                    }
+                    _ => {
+                        let one_based = Expr {
+                            kind: ExprKind::Binary {
+                                operator: "+".to_string(),
+                                left: index.clone(),
+                                right: Box::new(Expr {
+                                    kind: ExprKind::Number("1".to_string()),
+                                    token: index.token.clone(),
+                                    ty: Some(Type::Int),
+                                }),
+                            },
+                            token: index.token.clone(),
+                            ty: Some(Type::Int),
+                        };
+                        let reporter = self.reporter(&one_based, &id)?;
+                        json!([3, reporter, [7, "1"]])
+                    }
+                };
+                self.input(&id, "LETTER", letter);
+                let string = self.value_input(object, &id)?;
+                self.input(&id, "STRING", string);
+                Ok(id)
+            }
+            ExprKind::Binary {
+                operator,
+                left,
+                right,
             } => {
                 let (opcode, inverted) = match operator.as_str() {
                     "+" => ("operator_add", false),
                     "-" => ("operator_subtract", false),
                     "*" => ("operator_multiply", false),
                     "/" => ("operator_divide", false),
+                    "%" => ("operator_mod", false),
                     "==" => ("operator_equals", false),
                     "!=" => ("operator_equals", true),
                     "<" => ("operator_lt", false),
@@ -782,7 +831,7 @@ impl ScratchBuilder {
                 };
                 let id = self.block(opcode, Some(parent), false, json!({}));
                 let (first_name, second_name) =
-                    if matches!(operator.as_str(), "+" | "-" | "*" | "/") {
+                    if matches!(operator.as_str(), "+" | "-" | "*" | "/" | "%") {
                         ("NUM1", "NUM2")
                     } else {
                         ("OPERAND1", "OPERAND2")
@@ -819,6 +868,60 @@ impl ScratchBuilder {
             ExprKind::Match { .. } => {
                 Err("internal error: match expression was not lowered".to_string())
             }
+        }
+    }
+
+    /// Emit the Scratch blocks for `int(...)`, `float(...)`, `text(...)`, or `bool(...)`.
+    fn conversion_reporter(
+        &mut self,
+        target: Type,
+        operand: &Expr,
+        parent: &str,
+    ) -> Result<String, String> {
+        if conversion_is_identity(target, operand.ty) {
+            return self.reporter(operand, parent);
+        }
+        match target {
+            // int(x) rounds toward negative infinity, like Scratch's floor block.
+            Type::Int => {
+                let id = self.block(
+                    "operator_mathop",
+                    Some(parent),
+                    false,
+                    json!({"OPERATOR": ["floor", null]}),
+                );
+                let input = self.value_input(operand, &id)?;
+                self.input(&id, "NUM", input);
+                Ok(id)
+            }
+            // Scratch reads numeric text as a number in arithmetic; `x + 0` makes it one.
+            Type::Float => {
+                let id = self.block("operator_add", Some(parent), false, json!({}));
+                let input = self.value_input(operand, &id)?;
+                self.input(&id, "NUM1", input);
+                self.input(&id, "NUM2", json!([1, [4, "0"]]));
+                Ok(id)
+            }
+            Type::Text => {
+                let id = self.block("operator_join", Some(parent), false, json!({}));
+                let input = self.value_input(operand, &id)?;
+                self.input(&id, "STRING1", input);
+                self.input(&id, "STRING2", json!([1, [10, ""]]));
+                Ok(id)
+            }
+            Type::Bool => {
+                let not_id = self.block("operator_not", Some(parent), false, json!({}));
+                let equals_id = self.block("operator_equals", Some(&not_id), false, json!({}));
+                let input = self.value_input(operand, &equals_id)?;
+                self.input(&equals_id, "OPERAND1", input);
+                self.input(&equals_id, "OPERAND2", json!([1, [10, "0"]]));
+                self.input(&not_id, "OPERAND", json!([2, equals_id]));
+                Ok(not_id)
+            }
+            other => Err(format!(
+                "internal error: unsupported conversion to {}",
+                other.name()
+            )),
         }
     }
 
@@ -878,4 +981,16 @@ pub struct SymbolOccurrence {
     pub length: u32,
     pub declaration: bool,
     pub modification: bool,
+}
+
+/// Whether a conversion needs no Scratch block because the value already has
+/// the target representation.
+fn conversion_is_identity(target: Type, source: Option<Type>) -> bool {
+    matches!(
+        (target, source),
+        (Type::Int, Some(Type::Int | Type::Enum(_)))
+            | (Type::Float, Some(Type::Int | Type::Float | Type::Enum(_)))
+            | (Type::Text, Some(Type::Text))
+            | (Type::Bool, Some(Type::Bool))
+    )
 }

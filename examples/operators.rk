@@ -1,0 +1,34 @@
+// Arithmetic, compound assignment, text joining and indexing, and type conversion.
+
+fn toHex(input: int) -> text {
+    const digits: text = "0123456789ABCDEF"
+    var value: int = input
+    var result: text = ""
+    var negative = false
+    if value == 0 {
+        return "0"
+    }
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    while value > 0 {
+        var digit = value % 16
+        result = digits[digit] + result
+        value = int(value / 16)
+    }
+    if negative {
+        return "-" + result
+    }
+    return result
+}
+
+event Scratch.Events.greenFlag {
+    var count: int = 0
+    while count < 3 {
+        Scratch.Sensing.askAndWait("Enter a decimal number:")
+        var value = int(Scratch.Sensing.answer())
+        Scratch.Looks.sayForSeconds(text(value) + " = 0x" + toHex(value), 2)
+        count++
+    }
+}

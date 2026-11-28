@@ -117,6 +117,29 @@ fn hover_result(document: &Document, position: Position) -> Value {
                 });
             }
         }
+        if tokens.get(index + 1).is_some_and(|next| next.text == "(")
+            && !tokens[..index].last().is_some_and(|previous| previous.text == ".")
+        {
+            if let Some(conversion) = conversion_descriptions()
+                .iter()
+                .find(|conversion| conversion.name == token.text)
+            {
+                return json!({
+                    "contents": {
+                        "kind": "markdown",
+                        "value": format!("```rake
+{}
+```
+
+{}", conversion.signature, conversion.description)
+                    },
+                    "range": {
+                        "start": {"line": token.line, "character": token.start_character},
+                        "end": {"line": token.line, "character": token.start_character + token.length}
+                    }
+                });
+            }
+        }
         if scratch_list_constructor_at(&tokens, index) {
             return json!({
                 "contents": {

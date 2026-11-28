@@ -660,7 +660,7 @@ fn build_sprite(name: &Token, properties: Vec<SceneProperty>) -> Result<SceneSpr
 
 /// Parse and validate a `.rks` scene. When `scene_path` is given, referenced files are checked too.
 pub fn parse_scene(source: &str, scene_path: Option<&Path>) -> Result<SceneDocument, String> {
-    let tokens = lex_with_brackets(source, true)?;
+    let tokens = lex(source)?;
     let document = SceneParser { tokens, position: 0 }.parse_document()?;
     if let Some(scene_path) = scene_path {
         let base = scene_path.parent().unwrap_or(Path::new(""));

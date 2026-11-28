@@ -113,13 +113,14 @@
       "patterns": [
         {
           "name": "keyword.operator.rake",
-          "match": "=>|->|==|!=|<=|>=|&&|\\|\\||\\+=|-=|[+*/<>=!-]"
+          "match": "=>|->|==|!=|<=|>=|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|/=|%=|[+*/%<>=!-]"
         }
       ]
     },
     "punctuation": {
       "patterns": [
         {"name": "punctuation.section.block.begin.rake", "match": "[{}()]"},
+        {"name": "punctuation.section.brackets.rake", "match": "[\\[\\]]"},
         {"name": "punctuation.separator.rake", "match": "[.:,;]"}
       ]
     }

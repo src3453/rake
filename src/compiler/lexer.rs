@@ -90,12 +90,9 @@ fn split_module_diagnostic(message: &str) -> (u32, &str) {
     (0, message)
 }
 
+/// Lex a `.rk` source or `.rks` scene. `[` and `]` index text in sources and
+/// delimit lists in scenes.
 fn lex(source: &str) -> Result<Vec<Token>, String> {
-    lex_with_brackets(source, false)
-}
-
-/// `.rks` scene files additionally use `[` and `]` for lists; `.rk` sources do not.
-fn lex_with_brackets(source: &str, brackets: bool) -> Result<Vec<Token>, String> {
     let chars: Vec<char> = source.chars().collect();
     let mut tokens = Vec::new();
     let (mut index, mut line, mut column) = (0, 1, 1);
@@ -230,7 +227,20 @@ fn lex_with_brackets(source: &str, brackets: bool) -> Result<Vec<Token>, String>
         if let Some(pair) = pair.filter(|pair| {
             matches!(
                 pair.as_str(),
-                "==" | "!=" | "<=" | ">=" | "&&" | "||" | "+=" | "-=" | "->" | "=>"
+                "==" | "!="
+                    | "<="
+                    | ">="
+                    | "&&"
+                    | "||"
+                    | "+="
+                    | "-="
+                    | "*="
+                    | "/="
+                    | "%="
+                    | "++"
+                    | "--"
+                    | "->"
+                    | "=>"
             )
         }) {
             tokens.push(Token::new(
@@ -243,7 +253,7 @@ fn lex_with_brackets(source: &str, brackets: bool) -> Result<Vec<Token>, String>
             column += 2;
             continue;
         }
-        if "{}():;,.+-*/<>=!".contains(current) || (brackets && "[]".contains(current)) {
+        if "{}()[]:;,.+-*/%<>=!".contains(current) {
             tokens.push(Token::new(
                 TokenKind::Symbol,
                 current.to_string(),
@@ -269,7 +279,7 @@ pub fn source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
 
 /// Editor tokens for a `.rks` scene file, which also contains `[` and `]`.
 pub fn scene_source_tokens(source: &str) -> Result<Vec<SourceToken>, String> {
-    editor_tokens(source, lex_with_brackets(source, true)?)
+    editor_tokens(source, lex(source)?)
 }
 
 fn editor_tokens(source: &str, tokens: Vec<Token>) -> Result<Vec<SourceToken>, String> {

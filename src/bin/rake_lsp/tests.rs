@@ -887,4 +887,68 @@ mod tests {
         let diagnostics = diagnostics_for(&documents);
         assert!(diagnostics[0]["message"].as_str().unwrap().contains("cannot load library"));
     }
+
+    #[test]
+    fn conversion_functions_and_new_operators_are_supported_by_editor_features() {
+        let text = "var n: int = int(\"4\") % 3\nn *= 2\nn++\nvar label: text = \"n=\" + text(n)";
+        // Conversion calls are functions; `int` in an annotation stays a type.
+        let call_start = text.find("int(").unwrap() as u32;
+        assert_eq!(semantic_type_at(text, 0, call_start), Some(5));
+        assert_eq!(semantic_type_at(text, 0, 7), Some(1));
+        let modulo = text.find('%').unwrap() as u32;
+        assert_eq!(semantic_type_at(text, 0, modulo), Some(4));
+        assert_eq!(semantic_type_at(text, 1, 2), Some(4));
+        assert_eq!(semantic_type_at(text, 2, 1), Some(4));
+
+        let hover = hover_result(
+            &document(text),
+            Position {
+                line: 0,
+                character: call_start,
+            },
+        );
+        assert!(hover["contents"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("int(value: float | text | bool | Scratch.Generics.Value) -> int"));
+
+        let completion = completion_at("var x = te", 10);
+        let text_item = completion
+            .iter()
+            .find(|item| item["label"] == "text()")
+            .expect("text() conversion completion");
+        assert_eq!(text_item["insertText"], "text(${1:value})");
+        let type_completion = completion_at("var x: te", 9);
+        assert!(!type_completion.iter().any(|item| item["label"] == "text()"));
+
+        let diagnostics = source_diagnostics("file:///test.rk", text, &HashMap::new());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let diagnostics = source_diagnostics(
+            "file:///test.rk",
+            "var n: int = 3\nn /= 2",
+            &HashMap::new(),
+        );
+        assert!(diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot assign float to int variable"));
+    }
+
+    #[test]
+    fn text_indexing_is_tokenized_and_checked_in_editors() {
+        let text = "var word: text = \"Rake\"\nvar letter: text = word[0]";
+        let tokens = source_tokens(text).unwrap();
+        assert!(tokens.iter().any(|token| token.text == "[" && token.kind == SourceTokenKind::Symbol));
+        // `word` inside the index expression is still a variable reference.
+        let word_start = text.lines().nth(1).unwrap().find("word").unwrap() as u32;
+        assert_eq!(semantic_type_at(text, 1, word_start), Some(0));
+        assert!(source_diagnostics("file:///test.rk", text, &HashMap::new()).is_empty());
+
+        let diagnostics = source_diagnostics(
+            "file:///test.rk",
+            "var n: int = 1\nvar x: text = n[0]",
+            &HashMap::new(),
+        );
+        assert!(diagnostics[0]["message"].as_str().unwrap().contains("cannot index int"));
+    }
 }

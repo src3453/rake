@@ -1,6 +1,6 @@
 use rake::{
     SCENE_KEYWORDS, SourceToken, SourceTokenKind, SymbolOccurrence, analyze_symbols,
-    builtin_block_descriptions, builtin_event_descriptions, compile_source, parse_scene,
+    builtin_block_descriptions, builtin_event_descriptions, compile_source, conversion_descriptions, parse_scene,
     scene_property_descriptions, scene_source_tokens, source_tokens,
 };
 use serde_json::{Value, json};

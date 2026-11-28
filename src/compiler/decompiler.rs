@@ -596,7 +596,8 @@ impl<'a> Renderer<'a> {
                     DExpr::text_literal("")
                 };
             }
-            "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide" => {
+            "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide"
+            | "operator_mod" => {
                 let left = self.value_input(block, "NUM1");
                 let right = self.value_input(block, "NUM2");
                 if left.ty.numeric() && right.ty.numeric() {
@@ -604,6 +605,7 @@ impl<'a> Renderer<'a> {
                         "operator_add" => ("+", if left.ty == DTy::Int && right.ty == DTy::Int { DTy::Int } else { DTy::Float }),
                         "operator_subtract" => ("-", if left.ty == DTy::Int && right.ty == DTy::Int { DTy::Int } else { DTy::Float }),
                         "operator_multiply" => ("*", if left.ty == DTy::Int && right.ty == DTy::Int { DTy::Int } else { DTy::Float }),
+                        "operator_mod" => ("%", if left.ty == DTy::Int && right.ty == DTy::Int { DTy::Int } else { DTy::Float }),
                         _ => ("/", DTy::Float),
                     };
                     return make_binary_text(operator, left, right, ty);
@@ -612,9 +614,30 @@ impl<'a> Renderer<'a> {
                     "operator_add" => "add",
                     "operator_subtract" => "subtract",
                     "operator_multiply" => "multiply",
+                    "operator_mod" => "modulo",
                     _ => "divide",
                 };
                 return self.operators_call(member, &[&left, &right], DTy::Float);
+            }
+            "operator_letter_of" => {
+                let letter = self.value_input(block, "LETTER");
+                let string = self.value_input(block, "STRING");
+                if letter.ty.numeric() && matches!(string.ty, DTy::Text | DTy::Value) {
+                    // Scratch counts letters from 1; Rake indexes text from 0.
+                    let index = match letter.text.parse::<i64>() {
+                        Ok(value) => format_number((value - 1) as f64),
+                        // `s[i]` compiles to letterOf(i + 1, s); undo the `+ 1`.
+                        Err(_) => match letter.text.strip_suffix(" + 1") {
+                            Some(base) if letter.prec == binary_precedence("+") => base.to_string(),
+                            _ => make_binary_text("-", letter.clone(), DExpr::atom("1", DTy::Int), letter.ty).text,
+                        },
+                    };
+                    // Rake indexes require int; decompiled numeric variables are float.
+                    let index = if letter.ty == DTy::Int { index } else { format!("int({index})") };
+                    let object = if string.prec < 10 { format!("({})", string.text) } else { string.text };
+                    return DExpr::atom(format!("{object}[{index}]"), DTy::Text);
+                }
+                return self.operators_call("letterOf", &[&letter, &string], DTy::Text);
             }
             "operator_equals" => {
                 let is_text_literal = |name: &str| {

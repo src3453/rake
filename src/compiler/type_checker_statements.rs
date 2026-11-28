@@ -675,16 +675,9 @@ impl TypeChecker {
                     ));
                 }
                 let mut value_type = self.check_expr(value)?;
-                if operator != "=" {
-                    if !resolved.ty.numeric() || !value_type.numeric() {
-                        return Err(diagnostic(
-                            token,
-                            format!("{operator} requires numeric values"),
-                        ));
-                    }
-                    if resolved.ty == Type::Float || value_type == Type::Float {
-                        value_type = Type::Float;
-                    }
+                if let Some(binary) = compound_assignment_operator(operator) {
+                    value_type = Self::binary_result_type(binary, resolved.ty, value_type)
+                        .map_err(|message| diagnostic(token, format!("{operator}: {message}")))?;
                 }
                 if !Self::assignable(resolved.ty, value_type) {
                     return Err(diagnostic(
@@ -744,16 +737,9 @@ impl TypeChecker {
                     ));
                 }
                 let mut value_type = self.check_expr(value)?;
-                if operator != "=" {
-                    if !resolved.ty.numeric() || !value_type.numeric() {
-                        return Err(diagnostic(
-                            token,
-                            format!("{operator} requires numeric values"),
-                        ));
-                    }
-                    if resolved.ty == Type::Float || value_type == Type::Float {
-                        value_type = Type::Float;
-                    }
+                if let Some(binary) = compound_assignment_operator(operator) {
+                    value_type = Self::binary_result_type(binary, resolved.ty, value_type)
+                        .map_err(|message| diagnostic(token, format!("{operator}: {message}")))?;
                 }
                 if !Self::assignable(resolved.ty, value_type) {
                     return Err(diagnostic(
